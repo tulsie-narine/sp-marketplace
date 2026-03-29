@@ -727,6 +727,113 @@ function getShortClientIdCandidate(
   return [...discovered][0] || null;
 }
 
+function buildRecordNameLookup(records: Record<string, any>[]) {
+  const lookup = new Map<string, string>();
+  for (const record of records) {
+    const id = asText(record.id);
+    if (!id) continue;
+    lookup.set(id, getRecordName(record, "Unnamed record"));
+  }
+  return lookup;
+}
+
+async function fetchRelationshipIdList(
+  apiKey: string,
+  endpoint: string,
+  responseKey: string
+): Promise<string[]> {
+  const response = await proxyCallWithRetry<Record<string, unknown>>(
+    apiKey,
+    endpoint
+  );
+  const items = response[responseKey];
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => asText(item))
+    .filter((item): item is string => Boolean(item));
+}
+
+async function collectClientRelationshipsFromSource(
+  sourceApiKey: string,
+  sourceRecords: Partial<
+    Record<Exclude<MigrationObjectType, "relationships">, Record<string, any>[]>
+  >
+): Promise<PendingRelationship[]> {
+  const relationships: PendingRelationship[] = [];
+  const goals = sourceRecords.goals || [];
+  const initiatives = sourceRecords.initiatives || [];
+
+  const goalNames = buildRecordNameLookup(goals);
+  const initiativeNames = buildRecordNameLookup(initiatives);
+  const actionItemNames = buildRecordNameLookup(sourceRecords.actionItems || []);
+  const meetingNames = buildRecordNameLookup(sourceRecords.meetings || []);
+
+  for (const goal of goals) {
+    const goalId = asText(goal.id);
+    if (!goalId) continue;
+    const goalName = goalNames.get(goalId) || "Unnamed Goal";
+
+    const initiativeIds = await fetchRelationshipIdList(
+      sourceApiKey,
+      `/lifecycle-manager/v1/goals/${goalId}/initiatives`,
+      "initiative_ids"
+    );
+    for (const initiativeId of initiativeIds) {
+      relationships.push({
+        clientName: "",
+        type: "Goal ↔ Initiative",
+        sourceRecord: goalName,
+        targetRecord:
+          initiativeNames.get(initiativeId) || "Initiative",
+        sourceSourceId: goalId,
+        targetSourceId: initiativeId,
+      });
+    }
+
+    const meetingIds = await fetchRelationshipIdList(
+      sourceApiKey,
+      `/lifecycle-manager/v1/goals/${goalId}/meetings`,
+      "meeting_ids"
+    );
+    for (const meetingId of meetingIds) {
+      relationships.push({
+        clientName: "",
+        type: "Goal ↔ Meeting",
+        sourceRecord: goalName,
+        targetRecord: meetingNames.get(meetingId) || "Meeting",
+        sourceSourceId: goalId,
+        targetSourceId: meetingId,
+      });
+    }
+  }
+
+  for (const initiative of initiatives) {
+    const initiativeId = asText(initiative.id);
+    if (!initiativeId) continue;
+    const initiativeName =
+      initiativeNames.get(initiativeId) || "Unnamed Initiative";
+
+    const actionItemIds = await fetchRelationshipIdList(
+      sourceApiKey,
+      `/lifecycle-manager/v1/initiatives/${initiativeId}/action-items`,
+      "action_item_ids"
+    );
+    for (const actionItemId of actionItemIds) {
+      relationships.push({
+        clientName: "",
+        type: "Initiative ↔ Action Item",
+        sourceRecord: initiativeName,
+        targetRecord:
+          actionItemNames.get(actionItemId) || "Action Item",
+        sourceSourceId: initiativeId,
+        targetSourceId: actionItemId,
+      });
+    }
+  }
+
+  return relationships;
+}
+
 function buildMemberEmailFilterValue(email: string) {
   const normalizedEmail = email.trim().toLowerCase();
   return /[\s,"]/.test(normalizedEmail)
@@ -1716,6 +1823,9 @@ export async function runTenantMigration({
 
     const idMaps = getIdMaps();
     const pendingRelationships: PendingRelationship[] = [];
+    const sourceRecordsByType: Partial<
+      Record<Exclude<MigrationObjectType, "relationships">, Record<string, any>[]>
+    > = {};
     const sourceClient = sourceClientLookup.get(mapping.srcClientId);
     const destinationClient = destinationClientLookup.get(mapping.dstClientId);
 
@@ -1739,6 +1849,7 @@ export async function runTenantMigration({
           sourceClient,
           sourceDeliverableClientIdCache
         );
+        sourceRecordsByType[type] = records;
         progress.objects[type].total = records.length;
         onClientProgress(clientIndex, cloneProgress(progress));
       } catch (error) {
@@ -1799,12 +1910,6 @@ export async function runTenantMigration({
             idMaps.meetings.set(record.id, result.newId);
           }
 
-          pendingRelationships.push(
-            ...result.relationships.map((item) => ({
-              ...item,
-              clientName: mapping.srcClientName,
-            }))
-          );
         } catch (error) {
           const entry = buildError(
             mapping.srcClientName,
@@ -1835,6 +1940,30 @@ export async function runTenantMigration({
           ? "failed"
           : "partial";
       onClientProgress(clientIndex, cloneProgress(progress));
+    }
+
+    try {
+      pendingRelationships.push(
+        ...(
+          await collectClientRelationshipsFromSource(
+            sourceApiKey,
+            sourceRecordsByType
+          )
+        ).map((item) => ({
+          ...item,
+          clientName: mapping.srcClientName,
+        }))
+      );
+    } catch (error) {
+      const entry = buildError(
+        mapping.srcClientName,
+        "Relationships",
+        "Relationship harvest failed",
+        error
+      );
+      progress.objects.relationships.errors.push(entry);
+      allErrors.push(entry);
+      totalFailures += 1;
     }
 
     progress.objects.relationships.status = "running";
