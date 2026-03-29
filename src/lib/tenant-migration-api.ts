@@ -747,7 +747,7 @@ async function candidateWorksForDeliverables(
     return true;
   } catch (error) {
     const detail = error instanceof Error ? error.message : "";
-    if (detail.startsWith("404")) return false;
+    if (detail.startsWith("404") || detail.startsWith("422")) return false;
     throw error;
   }
 }
@@ -790,11 +790,6 @@ async function resolveDeliverableClientId(
       cache.set(client.id, candidate);
       return candidate;
     }
-  }
-
-  if (await candidateWorksForDeliverables(apiKey, client.id)) {
-    cache.set(client.id, client.id);
-    return client.id;
   }
 
   throw new Error(
@@ -1024,6 +1019,43 @@ async function migrateRecord(
       `/lifecycle-manager/v1/initiatives/${created.id}/recurring`,
       "PUT",
       { recurring_line_items: record.budget?.recurring_line_items || [] }
+    );
+
+    return {
+      newId: created.id,
+      recordName,
+      relationships: collectRelationships(type, record),
+      warnings,
+    };
+  }
+
+  if (type === "goals") {
+    const body = {
+      client_key: { id: destinationClientId },
+      title: asText(record.title) || "Untitled Goal",
+      description: asText(record.description) || "",
+      status: asText(record.status) || "OnTrack",
+      target_period: record.target_period || record.period || null,
+    };
+
+    const created = await proxyCallWithRetry<{ id: string }>(
+      destinationApiKey,
+      "/lifecycle-manager/v1/goals",
+      "POST",
+      body
+    );
+
+    await sleep(DEFAULT_DELAY_MS);
+    await proxyCallWithRetry(
+      destinationApiKey,
+      `/lifecycle-manager/v1/goals/${created.id}`,
+      "PUT",
+      {
+        title: body.title,
+        description: body.description,
+        status: body.status,
+        target_period: body.target_period,
+      }
     );
 
     return {
