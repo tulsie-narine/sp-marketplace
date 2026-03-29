@@ -557,7 +557,9 @@ function buildContractCreatePayload(record: Record<string, any>) {
       "Estimate",
     billing_start_at:
       asText(nested.billing_start_at) ||
+      asText(nested.billing_date) ||
       asText(record.billing_start_at) ||
+      asText(record.billing_date) ||
       new Date().toISOString(),
     should_budget_past_end_date:
       nested.should_budget_past_end_date ??
@@ -1166,11 +1168,13 @@ async function migrateRecord(
 
   if (type === "contracts") {
     const billingStartAt =
-      asText(record.billing_start_at) || new Date().toISOString();
+      asText(record.billing_start_at) ||
+      asText(record.billing_date) ||
+      new Date().toISOString();
     const contractTitle =
       asText(record.title) || asText(record.name) || "Migrated Contract";
 
-    if (!asText(record.billing_start_at)) {
+    if (!asText(record.billing_start_at) && !asText(record.billing_date)) {
       warnings.push(
         buildWarning(
           destinationClient.name,
