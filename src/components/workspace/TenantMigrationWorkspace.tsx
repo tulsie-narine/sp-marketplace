@@ -191,6 +191,7 @@ export function TenantMigrationWorkspace() {
   const [sourceClients, setSourceClients] = useState<MigrationClient[]>([]);
   const [destinationClients, setDestinationClients] = useState<MigrationClient[]>([]);
   const [destinationUsers, setDestinationUsers] = useState<DestinationUser[]>([]);
+  const [destinationUsersError, setDestinationUsersError] = useState<string | null>(null);
   const [clientMappings, setClientMappings] = useState<ClientMapping[]>([]);
   const [selectedObjects, setSelectedObjects] = useState<SelectedObjects>(DEFAULT_SELECTED_OBJECTS);
   const [actionItemAssigneeId, setActionItemAssigneeId] = useState("");
@@ -297,13 +298,20 @@ export function TenantMigrationWorkspace() {
     setLoadingClients(true);
     setLoadingMessage("Connecting to source tenant...");
     setScreenOneError(null);
+    setDestinationUsersError(null);
 
     try {
-      const [destination, source, users] = await Promise.all([
+      const [destination, source] = await Promise.all([
         fetchAllClients(destinationApiKey),
         fetchAllClients(sourceApiKey.trim()),
-        fetchAllDestinationUsers(destinationApiKey).catch(() => []),
       ]);
+
+      let users: DestinationUser[] = [];
+      try {
+        users = await fetchAllDestinationUsers(destinationApiKey);
+      } catch (error) {
+        setDestinationUsersError(error instanceof Error ? error.message : "Failed to load destination users.");
+      }
 
       setDestinationClients(destination);
       setSourceClients(source);
@@ -316,8 +324,8 @@ export function TenantMigrationWorkspace() {
       });
       if (users.length === 0) {
         toast({
-          title: "Destination users could not be loaded",
-          description: "Action Item migration will need a destination assignee once user loading is available for this tenant.",
+          title: "Destination users are unavailable",
+          description: "If Action Items are selected, the assignee dropdown will stay empty until the members list loads successfully.",
           variant: "destructive",
         });
       }
@@ -461,6 +469,7 @@ export function TenantMigrationWorkspace() {
     setSourceClients([]);
     setDestinationClients([]);
     setDestinationUsers([]);
+    setDestinationUsersError(null);
     setClientMappings([]);
     setSelectedObjects(DEFAULT_SELECTED_OBJECTS);
     setActionItemAssigneeId("");
@@ -772,6 +781,16 @@ export function TenantMigrationWorkspace() {
               </option>
             ))}
           </select>
+          {destinationUsersError && (
+            <p className="mt-2 text-xs text-destructive">
+              Could not load destination users: {destinationUsersError}
+            </p>
+          )}
+          {!destinationUsersError && destinationUserOptions.length === 0 && (
+            <p className="mt-2 text-xs text-warning">
+              No destination users were returned by the List Members API for this tenant.
+            </p>
+          )}
           <p className="mt-2 text-xs text-muted-foreground">
             Source assignee IDs cannot be reused across tenants, so migrated action items will be reassigned to this destination user.
           </p>

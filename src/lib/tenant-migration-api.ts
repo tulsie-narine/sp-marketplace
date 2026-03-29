@@ -16,9 +16,15 @@ export interface DestinationUser {
   id: string;
   first_name?: string;
   last_name?: string;
+  middle_name?: string;
+  first?: string;
+  middle?: string;
+  last?: string;
+  full?: string;
   name?: string;
   full_name?: string;
   email?: string;
+  primary_email?: string;
   active?: boolean;
 }
 
@@ -310,13 +316,19 @@ async function fetchAllPostPages<T>(
   let cursor: string | null = null;
 
   do {
-    const response = await proxyCallWithRetry<{ data?: T[]; next_cursor?: string | null }>(
+    const response = await proxyCallWithRetry<any>(
       apiKey,
       endpoint,
       "POST",
       bodyBuilder(cursor)
     );
-    results.push(...(response.data || []));
+    const items =
+      response.data ||
+      response.items ||
+      response.results ||
+      response.members ||
+      [];
+    results.push(...items);
     cursor = response.next_cursor || null;
   } while (cursor);
 
@@ -336,7 +348,7 @@ export async function fetchAllDestinationUsers(apiKey: string): Promise<Destinat
     apiKey,
     "/core/v1/members",
     (cursor) => {
-      const body: Record<string, unknown> = { page_size: 200, sort: "name" };
+      const body: Record<string, unknown> = { page_size: 200 };
       if (cursor) body.cursor = cursor;
       return body;
     }
@@ -391,12 +403,17 @@ function getRecordName(record: Record<string, any>, fallback: string) {
 
 export function getDestinationUserLabel(user: DestinationUser) {
   const fullName =
+    user.full ||
     user.name ||
     user.full_name ||
-    [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+    [user.first_name || user.first, user.middle_name || user.middle, user.last_name || user.last]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
 
-  if (fullName && user.email) return `${fullName} (${user.email})`;
-  return fullName || user.email || user.id;
+  const email = user.email || user.primary_email;
+  if (fullName && email) return `${fullName} (${email})`;
+  return fullName || email || user.id;
 }
 
 function resolveClientRouteKey(client: MigrationClient | Record<string, any>) {
