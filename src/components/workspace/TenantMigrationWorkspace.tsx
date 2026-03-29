@@ -17,11 +17,14 @@ import {
   autoMatchClientMappings,
   buildInitialClientProgress,
   fetchAllClients,
+  fetchAllDestinationUsers,
+  getDestinationUserLabel,
   maskApiKey,
   OBJECT_LABELS,
   runTenantMigration,
   type ClientMapping,
   type ClientMigrationProgress,
+  type DestinationUser,
   type MigrationClient,
   type MigrationObjectType,
   type MigrationResult,
@@ -187,8 +190,10 @@ export function TenantMigrationWorkspace() {
   const [destinationApiKey] = useState(() => window.sessionStorage.getItem("sp_api_key") || "");
   const [sourceClients, setSourceClients] = useState<MigrationClient[]>([]);
   const [destinationClients, setDestinationClients] = useState<MigrationClient[]>([]);
+  const [destinationUsers, setDestinationUsers] = useState<DestinationUser[]>([]);
   const [clientMappings, setClientMappings] = useState<ClientMapping[]>([]);
   const [selectedObjects, setSelectedObjects] = useState<SelectedObjects>(DEFAULT_SELECTED_OBJECTS);
+  const [actionItemAssigneeId, setActionItemAssigneeId] = useState("");
   const [migrationProgress, setMigrationProgress] = useState<ClientMigrationProgress[]>([]);
   const [migrationResult, setMigrationResult] = useState<MigrationResult | null>(null);
   const [loadingClients, setLoadingClients] = useState(false);
@@ -244,6 +249,10 @@ export function TenantMigrationWorkspace() {
     () => [...destinationClients].sort((a, b) => a.name.localeCompare(b.name)),
     [destinationClients]
   );
+  const destinationUserOptions = useMemo(
+    () => [...destinationUsers].sort((a, b) => getDestinationUserLabel(a).localeCompare(getDestinationUserLabel(b))),
+    [destinationUsers]
+  );
   const destinationLookup = useMemo(() => new Map(destinationClients.map((client) => [client.id, client])), [destinationClients]);
   const mappingLookup = useMemo(() => new Map(clientMappings.map((mapping) => [mapping.srcClientId, mapping])), [clientMappings]);
 
@@ -290,19 +299,28 @@ export function TenantMigrationWorkspace() {
     setScreenOneError(null);
 
     try {
-      const [destination, source] = await Promise.all([
+      const [destination, source, users] = await Promise.all([
         fetchAllClients(destinationApiKey),
         fetchAllClients(sourceApiKey.trim()),
+        fetchAllDestinationUsers(destinationApiKey).catch(() => []),
       ]);
 
       setDestinationClients(destination);
       setSourceClients(source);
+      setDestinationUsers(users);
       setClientMappings(autoMatchClientMappings(source, destination));
       setCurrentScreen(2);
       toast({
         title: "Clients loaded",
-        description: `Loaded ${source.length} source clients and ${destination.length} destination clients.`,
+        description: `Loaded ${source.length} source clients, ${destination.length} destination clients, and ${users.length} destination users.`,
       });
+      if (users.length === 0) {
+        toast({
+          title: "Destination users could not be loaded",
+          description: "Action Item migration will need a destination assignee once user loading is available for this tenant.",
+          variant: "destructive",
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load clients";
       if (message.includes("403")) {
@@ -362,6 +380,15 @@ export function TenantMigrationWorkspace() {
       return;
     }
 
+    if (selectedObjects.actionItems && !actionItemAssigneeId) {
+      toast({
+        title: "Choose an Action Item assignee",
+        description: "Select the destination user who should own migrated action items before starting the migration.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const selectedMappings = mappedClients;
     const initialProgress = selectedMappings.map((mapping) => buildInitialClientProgress(mapping));
     setMigrationProgress(initialProgress);
@@ -376,6 +403,9 @@ export function TenantMigrationWorkspace() {
         destinationApiKey,
         mappings: selectedMappings,
         selectedObjects,
+        sourceClients,
+        destinationClients,
+        actionItemAssigneeId: selectedObjects.actionItems ? actionItemAssigneeId : null,
         onClientProgress: (clientIndex, progress) => {
           setMigrationProgress((prev) => prev.map((item, index) => (index === clientIndex ? progress : item)));
         },
@@ -430,8 +460,10 @@ export function TenantMigrationWorkspace() {
     setSourceApiKey("");
     setSourceClients([]);
     setDestinationClients([]);
+    setDestinationUsers([]);
     setClientMappings([]);
     setSelectedObjects(DEFAULT_SELECTED_OBJECTS);
+    setActionItemAssigneeId("");
     setMigrationProgress([]);
     setMigrationResult(null);
     setMigrationRunning(false);
@@ -722,6 +754,29 @@ export function TenantMigrationWorkspace() {
           </label>
         ))}
       </div>
+
+      {selectedObjects.actionItems && (
+        <div className="mt-5 rounded-md border border-border bg-surface-raised p-4">
+          <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Assign All Action Items To
+          </label>
+          <select
+            value={actionItemAssigneeId}
+            onChange={(event) => setActionItemAssigneeId(event.target.value)}
+            className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            <option value="">Select destination user...</option>
+            {destinationUserOptions.map((user) => (
+              <option key={user.id} value={user.id}>
+                {getDestinationUserLabel(user)}
+              </option>
+            ))}
+          </select>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Source assignee IDs cannot be reused across tenants, so migrated action items will be reassigned to this destination user.
+          </p>
+        </div>
+      )}
 
       <div className="mt-5 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
         Relationships between objects (e.g. Goals linked to Initiatives, Action Items linked to Meetings) will only be preserved if both linked object types are selected.

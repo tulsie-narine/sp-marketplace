@@ -5,6 +5,21 @@ export interface MigrationClient {
   name: string;
   lifecycle: string;
   num_hardware_assets: number;
+  client_id?: string | number;
+  client_number?: string | number;
+  key?: string;
+  reference?: string;
+  label?: string;
+}
+
+export interface DestinationUser {
+  id: string;
+  first_name?: string;
+  last_name?: string;
+  name?: string;
+  full_name?: string;
+  email?: string;
+  active?: boolean;
 }
 
 export type MigrationObjectType =
@@ -92,6 +107,9 @@ export interface RunMigrationParams {
   destinationApiKey: string;
   mappings: ClientMapping[];
   selectedObjects: SelectedObjects;
+  sourceClients: MigrationClient[];
+  destinationClients: MigrationClient[];
+  actionItemAssigneeId?: string | null;
   onClientProgress: (clientIndex: number, progress: ClientMigrationProgress) => void;
 }
 
@@ -291,6 +309,16 @@ export async function fetchAllClients(apiKey: string): Promise<MigrationClient[]
   });
 }
 
+export async function fetchAllDestinationUsers(apiKey: string): Promise<DestinationUser[]> {
+  const members = await fetchAllPages<DestinationUser>(apiKey, (cursor) => {
+    const params = new URLSearchParams({ page_size: "200", sort: "name" });
+    if (cursor) params.set("cursor", cursor);
+    return `/core/v1/members?${params.toString()}`;
+  });
+
+  return members.filter((member) => member.active !== false);
+}
+
 function omitFields(record: Record<string, unknown>, fields: string[]) {
   const clone = { ...record };
   for (const field of fields) {
@@ -326,11 +354,77 @@ function getRecordName(record: Record<string, any>, fallback: string) {
   return (
     record.name ||
     record.title ||
+    record.topic ||
+    record.display_name ||
     record.label ||
     record.subject ||
     record.summary ||
     fallback
   );
+}
+
+export function getDestinationUserLabel(user: DestinationUser) {
+  const fullName =
+    user.name ||
+    user.full_name ||
+    [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+
+  if (fullName && user.email) return `${fullName} (${user.email})`;
+  return fullName || user.email || user.id;
+}
+
+function resolveClientRouteKey(client: MigrationClient | Record<string, any>) {
+  return (
+    client.client_id ||
+    client.client_number ||
+    client.key ||
+    client.reference ||
+    client.id
+  );
+}
+
+function buildActionItemBody(
+  destinationClientId: string,
+  record: Record<string, any>,
+  actionItemAssigneeId?: string | null
+) {
+  const body = clientWriteBody(destinationClientId, record, [
+    "completion_status",
+    "assigned_user_ids",
+    "assigned_users",
+    "assigned_user_id",
+  ]);
+
+  if (actionItemAssigneeId) {
+    return {
+      ...body,
+      assigned_user_ids: [{ id: actionItemAssigneeId }],
+    };
+  }
+
+  delete (body as Record<string, unknown>).assigned_user_ids;
+  return body;
+}
+
+function buildContractCreatePayload(record: Record<string, any>) {
+  const nestedPayload =
+    record.create_payload && typeof record.create_payload === "object"
+      ? { ...(record.create_payload as Record<string, unknown>) }
+      : {};
+
+  return {
+    ...nestedPayload,
+    name:
+      nestedPayload.name ||
+      record.name ||
+      record.title ||
+      "Untitled Contract",
+    description:
+      nestedPayload.description ||
+      record.description ||
+      record.summary ||
+      "",
+  };
 }
 
 function extractIds(items: unknown): string[] {
@@ -414,13 +508,14 @@ function collectRelationships(type: Exclude<MigrationObjectType, "relationships"
 async function fetchObjectRecords(
   apiKey: string,
   type: Exclude<MigrationObjectType, "relationships">,
-  clientId: string
+  client: MigrationClient
 ): Promise<Record<string, any>[]> {
   if (type === "deliverables") {
+    const clientRouteKey = resolveClientRouteKey(client);
     const deliverables = await fetchAllPages<Record<string, any>>(apiKey, (cursor) => {
       const params = new URLSearchParams({ page_size: "100" });
       if (cursor) params.set("cursor", cursor);
-      return `/lifecycle-manager/v1/clients/${clientId}/deliverables?${params.toString()}`;
+      return `/lifecycle-manager/v1/clients/${clientRouteKey}/deliverables?${params.toString()}`;
     });
 
     const detailed: Record<string, any>[] = [];
@@ -440,7 +535,7 @@ async function fetchObjectRecords(
 
   const list = await fetchAllPages<Record<string, any>>(apiKey, (cursor) => {
     const params = new URLSearchParams({
-      "filter[client.id]": clientId,
+      "filter[client.id]": client.id,
       page_size: "100",
     });
     if (cursor) params.set("cursor", cursor);
@@ -472,11 +567,12 @@ function getIdMaps() {
 
 async function migrateRecord(
   type: Exclude<MigrationObjectType, "relationships">,
-  sourceApiKey: string,
   destinationApiKey: string,
-  destinationClientId: string,
-  record: Record<string, any>
+  destinationClient: MigrationClient,
+  record: Record<string, any>,
+  actionItemAssigneeId?: string | null
 ): Promise<{ newId?: string; recordName: string; relationships: PendingRelationship[] }> {
+  const destinationClientId = destinationClient.id;
   const recordName = getRecordName(record, `Unnamed ${OBJECT_LABELS[type]}`);
 
   if (type === "initiatives") {
@@ -554,7 +650,7 @@ async function migrateRecord(
   }
 
   if (type === "actionItems") {
-    const body = clientWriteBody(destinationClientId, record, ["completion_status"]);
+    const body = buildActionItemBody(destinationClientId, record, actionItemAssigneeId);
     const created = await proxyCallWithRetry<{ id: string }>(
       destinationApiKey,
       "/lifecycle-manager/v1/action-items",
@@ -580,7 +676,10 @@ async function migrateRecord(
   }
 
   if (type === "contracts") {
-    const body = clientWriteBody(destinationClientId, record);
+    const body = {
+      client_key: { id: destinationClientId },
+      create_payload: buildContractCreatePayload(record),
+    };
     const created = await proxyCallWithRetry<{ id: string }>(
       destinationApiKey,
       "/lifecycle-manager/v1/contracts",
@@ -593,7 +692,10 @@ async function migrateRecord(
   }
 
   if (type === "assessments") {
-    const body = clientWriteBody(destinationClientId, record, ["completion_status", "answered_items", "answers"]);
+    const body = {
+      ...clientWriteBody(destinationClientId, record, ["completion_status", "answered_items", "answers"]),
+      evaluate_at: record.evaluate_at || record.record_updated_at || new Date().toISOString(),
+    };
     const created = await proxyCallWithRetry<{ id: string }>(
       destinationApiKey,
       "/lifecycle-manager/v1/assessments",
@@ -628,15 +730,20 @@ async function migrateRecord(
       "attendees",
       "attendee_users",
       "attendee_contacts",
+      "title",
     ]);
+    const titledBody = {
+      ...body,
+      title: record.title || record.name || record.subject || record.topic || "Migrated Meeting",
+    };
     const created = await proxyCallWithRetry<{ id: string }>(
       destinationApiKey,
       "/lifecycle-manager/v1/meetings",
       "POST",
-      body
+      titledBody
     );
     await sleep(DEFAULT_DELAY_MS);
-    await proxyCallWithRetry(destinationApiKey, `/lifecycle-manager/v1/meetings/${created.id}`, "PUT", body);
+    await proxyCallWithRetry(destinationApiKey, `/lifecycle-manager/v1/meetings/${created.id}`, "PUT", titledBody);
     if (record.completion_status) {
       await sleep(DEFAULT_DELAY_MS);
       await proxyCallWithRetry(
@@ -678,7 +785,7 @@ async function migrateRecord(
   const body = omitFields(record, ["id", "client", "client_id", "client_key", "record_created_at", "record_updated_at"]);
   const created = await proxyCallWithRetry<{ id: string }>(
     destinationApiKey,
-    `/lifecycle-manager/v1/clients/${destinationClientId}/deliverables`,
+    `/lifecycle-manager/v1/clients/${resolveClientRouteKey(destinationClient)}/deliverables`,
     "POST",
     body
   );
@@ -762,6 +869,9 @@ export async function runTenantMigration({
   destinationApiKey,
   mappings,
   selectedObjects,
+  sourceClients,
+  destinationClients,
+  actionItemAssigneeId,
   onClientProgress,
 }: RunMigrationParams): Promise<MigrationResult> {
   const clientSummaries: ClientSummary[] = [];
@@ -769,6 +879,8 @@ export async function runTenantMigration({
   const relationshipLog: RelationshipLogEntry[] = [];
   let totalCreated = 0;
   let totalFailures = 0;
+  const sourceClientLookup = new Map(sourceClients.map((client) => [client.id, client]));
+  const destinationClientLookup = new Map(destinationClients.map((client) => [client.id, client]));
 
   for (let clientIndex = 0; clientIndex < mappings.length; clientIndex += 1) {
     const mapping = mappings[clientIndex];
@@ -781,6 +893,12 @@ export async function runTenantMigration({
 
     const idMaps = getIdMaps();
     const pendingRelationships: PendingRelationship[] = [];
+    const sourceClient = sourceClientLookup.get(mapping.srcClientId);
+    const destinationClient = destinationClientLookup.get(mapping.dstClientId);
+
+    if (!sourceClient || !destinationClient) {
+      continue;
+    }
 
     for (const type of OBJECT_ORDER) {
       const selected = selectedObjects[type];
@@ -795,7 +913,7 @@ export async function runTenantMigration({
 
       let records: Record<string, any>[] = [];
       try {
-        records = await fetchObjectRecords(sourceApiKey, type, mapping.srcClientId);
+        records = await fetchObjectRecords(sourceApiKey, type, sourceClient);
         progress.objects[type].total = records.length;
         onClientProgress(clientIndex, cloneProgress(progress));
       } catch (error) {
@@ -817,7 +935,13 @@ export async function runTenantMigration({
       for (const record of records) {
         await sleep(DEFAULT_DELAY_MS);
         try {
-          const result = await migrateRecord(type, sourceApiKey, destinationApiKey, mapping.dstClientId, record);
+          const result = await migrateRecord(
+            type,
+            destinationApiKey,
+            destinationClient,
+            record,
+            actionItemAssigneeId
+          );
           progress.objects[type].succeeded += 1;
           totalCreated += 1;
 
