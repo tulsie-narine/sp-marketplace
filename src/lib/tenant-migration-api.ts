@@ -63,6 +63,9 @@ export interface MigrationErrorEntry {
   method?: string;
   requestPayload?: Record<string, unknown> | unknown[] | null;
   requestPayloadText?: string;
+  resolvedEmail?: string | null;
+  resolvedUserId?: string | null;
+  sourceUserId?: string | null;
 }
 
 export interface RelationshipLogEntry {
@@ -106,6 +109,7 @@ export interface MigrationResult {
   relationshipLog: RelationshipLogEntry[];
   totalCreated: number;
   totalFailures: number;
+  debugDiagnostics?: MigrationDebugEntry[];
 }
 
 export interface RunMigrationParams {
@@ -136,6 +140,16 @@ interface PendingRelationship {
   targetRecord: string;
   sourceSourceId: string;
   targetSourceId: string;
+}
+
+export interface MigrationDebugEntry {
+  clientName: string;
+  objectType: string;
+  recordName: string;
+  resolvedEmail?: string | null;
+  resolvedUserId?: string | null;
+  sourceUserId?: string | null;
+  note?: string | null;
 }
 
 const DEFAULT_DELAY_MS = 120;
@@ -292,6 +306,9 @@ function buildError(
         ? ((apiError.requestPayload as ApiBody | null | undefined) ?? null)
         : undefined,
     requestPayloadText: asText(apiError?.requestPayloadText) || undefined,
+    resolvedEmail: asText(apiError?.resolvedEmail) || undefined,
+    resolvedUserId: asText(apiError?.resolvedUserId) || undefined,
+    sourceUserId: asText(apiError?.sourceUserId) || undefined,
   };
 }
 
@@ -1022,6 +1039,7 @@ async function migrateRecord(
   recordName: string;
   relationships: PendingRelationship[];
   warnings: MigrationErrorEntry[];
+  debugDiagnostic?: MigrationDebugEntry;
 }> {
   const destinationClientId = destinationClient.id;
   const recordName = getRecordName(
@@ -1169,6 +1187,12 @@ async function migrateRecord(
   if (type === "actionItems") {
     const assigneeEmail =
       extractActionItemAssigneeEmail(record) || actionItemAssigneeEmail || null;
+    const matchedUserId =
+      findDestinationMemberIdByEmail(destinationMembers, assigneeEmail) ||
+      (await findDestinationMemberIdByEmailViaApi(
+        destinationApiKey,
+        assigneeEmail
+      ));
 
     if (!assigneeEmail) {
       throw new Error("Skipped - no assignee available.");
@@ -1203,6 +1227,19 @@ async function migrateRecord(
       recordName,
       relationships: collectRelationships(type, record),
       warnings,
+      debugDiagnostic: {
+        clientName: destinationClient.name,
+        objectType: OBJECT_LABELS.actionItems,
+        recordName,
+        resolvedEmail: assigneeEmail,
+        resolvedUserId: matchedUserId,
+        sourceUserId:
+          asText(record.assigned_user?.id) ||
+          asText(record.assignee?.id) ||
+          asText(record.assigned_user_id) ||
+          null,
+        note: "Action Item assignee resolution",
+      },
     };
   }
 
@@ -1286,9 +1323,17 @@ async function migrateRecord(
     }
 
     if (!evaluatorUserId) {
-      throw new Error(
+      const error = new Error(
         `Skipped - evaluate_user_id could not be resolved in the destination tenant for ${preferredEvaluatorEmail || "the configured fallback user"}.`
-      );
+      ) as Error & {
+        resolvedEmail?: string | null;
+        resolvedUserId?: string | null;
+        sourceUserId?: string | null;
+      };
+      error.resolvedEmail = preferredEvaluatorEmail;
+      error.resolvedUserId = null;
+      error.sourceUserId = asText(record.evaluate_user_id);
+      throw error;
     }
 
     const body = {
@@ -1331,7 +1376,21 @@ async function migrateRecord(
       )
     );
 
-    return { newId: created.id, recordName, relationships: [], warnings };
+    return {
+      newId: created.id,
+      recordName,
+      relationships: [],
+      warnings,
+      debugDiagnostic: {
+        clientName: destinationClient.name,
+        objectType: OBJECT_LABELS.assessments,
+        recordName,
+        resolvedEmail: preferredEvaluatorEmail,
+        resolvedUserId: evaluatorUserId,
+        sourceUserId: asText(record.evaluate_user_id),
+        note: "Assessment evaluator resolution",
+      },
+    };
   }
 
   if (type === "meetings") {
@@ -1557,6 +1616,7 @@ export async function runTenantMigration({
   const clientSummaries: ClientSummary[] = [];
   const allErrors: MigrationErrorEntry[] = [];
   const relationshipLog: RelationshipLogEntry[] = [];
+  const debugDiagnostics: MigrationDebugEntry[] = [];
   let totalCreated = 0;
   let totalFailures = 0;
   let destinationMembers: DestinationMember[] = [];
@@ -1570,7 +1630,7 @@ export async function runTenantMigration({
     destinationClients.map((client) => [client.id, client])
   );
 
-  if (selectedObjects.assessments) {
+  if (selectedObjects.assessments || selectedObjects.actionItems) {
     try {
       destinationMembers = await fetchDestinationMembers(destinationApiKey);
     } catch {
@@ -1653,6 +1713,10 @@ export async function runTenantMigration({
           if (result.warnings.length > 0) {
             progress.objects[type].errors.push(...result.warnings);
             allErrors.push(...result.warnings);
+          }
+
+          if (result.debugDiagnostic) {
+            debugDiagnostics.push(result.debugDiagnostic);
           }
 
           if (type === "initiatives" && result.newId) {
@@ -1783,5 +1847,6 @@ export async function runTenantMigration({
     relationshipLog,
     totalCreated,
     totalFailures,
+    debugDiagnostics,
   };
 }

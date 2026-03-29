@@ -431,18 +431,32 @@ export function TenantMigrationWorkspace() {
   };
 
   const exportDebugAsJson = () => {
-    if (!filteredErrors.length) return;
+    if (!migrationResult) return;
 
-    const payload = filteredErrors.map((entry) => ({
-      client: entry.clientName,
-      objectType: entry.objectType,
-      record: entry.recordName,
-      errorCode: Number(entry.errorCode) || entry.errorCode,
-      errorDetail: entry.errorDetail,
-      endpoint: entry.endpoint || null,
-      method: entry.method || null,
-      request_payload: entry.requestPayload ?? null,
-    }));
+    const payload = {
+      errors: filteredErrors.map((entry) => ({
+        client: entry.clientName,
+        objectType: entry.objectType,
+        record: entry.recordName,
+        errorCode: Number(entry.errorCode) || entry.errorCode,
+        errorDetail: entry.errorDetail,
+        endpoint: entry.endpoint || null,
+        method: entry.method || null,
+        request_payload: entry.requestPayload ?? null,
+        resolved_email: entry.resolvedEmail ?? null,
+        resolved_user_id: entry.resolvedUserId ?? null,
+        source_user_id: entry.sourceUserId ?? null,
+      })),
+      diagnostics: (migrationResult.debugDiagnostics || []).map((entry) => ({
+        client: entry.clientName,
+        objectType: entry.objectType,
+        record: entry.recordName,
+        resolved_email: entry.resolvedEmail ?? null,
+        resolved_user_id: entry.resolvedUserId ?? null,
+        source_user_id: entry.sourceUserId ?? null,
+        note: entry.note ?? null,
+      })),
+    };
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
