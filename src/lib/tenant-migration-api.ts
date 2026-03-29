@@ -531,6 +531,22 @@ function buildContractCreatePayload(record: Record<string, any>) {
   const nested = isRecord(record.create_payload)
     ? { ...record.create_payload }
     : {};
+  const resolvedBillingStartAt =
+    asText(nested.billing_start_at) ||
+    asText(nested.billing_date) ||
+    asText(nested.next_due) ||
+    asText(nested.next_due_at) ||
+    asText(nested.next_due_on) ||
+    asText(nested.renewal_date) ||
+    asText(nested.renewal_at) ||
+    asText(record.billing_start_at) ||
+    asText(record.billing_date) ||
+    asText(record.next_due) ||
+    asText(record.next_due_at) ||
+    asText(record.next_due_on) ||
+    asText(record.renewal_date) ||
+    asText(record.renewal_at) ||
+    new Date().toISOString();
 
   return {
     title:
@@ -555,12 +571,7 @@ function buildContractCreatePayload(record: Record<string, any>) {
       asText(nested.billing_cost_type) ||
       asText(record.billing_cost_type) ||
       "Estimate",
-    billing_start_at:
-      asText(nested.billing_start_at) ||
-      asText(nested.billing_date) ||
-      asText(record.billing_start_at) ||
-      asText(record.billing_date) ||
-      new Date().toISOString(),
+    billing_start_at: resolvedBillingStartAt,
     should_budget_past_end_date:
       nested.should_budget_past_end_date ??
       record.should_budget_past_end_date ??
@@ -741,7 +752,7 @@ async function findDestinationMemberIdByEmailViaApi(
     "POST",
     {
       filter: {
-        "contact_info.email": `eq:${normalizedEmail}`,
+        "contact_info.email": `eq:\"${normalizedEmail}\"`,
       },
     }
   );
@@ -1199,11 +1210,24 @@ async function migrateRecord(
     const billingStartAt =
       asText(record.billing_start_at) ||
       asText(record.billing_date) ||
+      asText(record.next_due) ||
+      asText(record.next_due_at) ||
+      asText(record.next_due_on) ||
+      asText(record.renewal_date) ||
+      asText(record.renewal_at) ||
       new Date().toISOString();
     const contractTitle =
       asText(record.title) || asText(record.name) || "Migrated Contract";
 
-    if (!asText(record.billing_start_at) && !asText(record.billing_date)) {
+    if (
+      !asText(record.billing_start_at) &&
+      !asText(record.billing_date) &&
+      !asText(record.next_due) &&
+      !asText(record.next_due_at) &&
+      !asText(record.next_due_on) &&
+      !asText(record.renewal_date) &&
+      !asText(record.renewal_at)
+    ) {
       warnings.push(
         buildWarning(
           destinationClient.name,
@@ -1263,7 +1287,7 @@ async function migrateRecord(
 
     if (!evaluatorUserId) {
       throw new Error(
-        "Skipped - evaluate_user_id could not be resolved in the destination tenant."
+        `Skipped - evaluate_user_id could not be resolved in the destination tenant for ${preferredEvaluatorEmail || "the configured fallback user"}.`
       );
     }
 
