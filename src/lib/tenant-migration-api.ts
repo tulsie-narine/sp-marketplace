@@ -763,11 +763,12 @@ async function collectClientRelationshipsFromSource(
   const goals = sourceRecords.goals || [];
   const initiatives = sourceRecords.initiatives || [];
   const actionItems = sourceRecords.actionItems || [];
+  const meetings = sourceRecords.meetings || [];
 
   const goalNames = buildRecordNameLookup(goals);
   const initiativeNames = buildRecordNameLookup(initiatives);
   const actionItemNames = buildRecordNameLookup(actionItems);
-  const meetingNames = buildRecordNameLookup(sourceRecords.meetings || []);
+  const meetingNames = buildRecordNameLookup(meetings);
   const seen = new Set<string>();
 
   const pushRelationship = (relationship: PendingRelationship) => {
@@ -840,6 +841,55 @@ async function collectClientRelationshipsFromSource(
           actionItemNames.get(actionItemId) || "Action Item",
         sourceSourceId: initiativeId,
         targetSourceId: actionItemId,
+      });
+    }
+  }
+
+  for (const meeting of meetings) {
+    const meetingId = asText(meeting.id);
+    if (!meetingId) continue;
+    const meetingName = meetingNames.get(meetingId) || "Unnamed Meeting";
+
+    const initiativeIds = await fetchRelationshipIdList(
+      sourceApiKey,
+      `/lifecycle-manager/v1/meetings/${meetingId}/initiatives`,
+      "initiative_ids"
+    );
+    for (const initiativeId of initiativeIds) {
+      pushRelationship({
+        clientName: "",
+        type: "Initiative ↔ Meeting",
+        sourceRecord: initiativeNames.get(initiativeId) || "Initiative",
+        targetRecord: meetingName,
+        sourceSourceId: initiativeId,
+        targetSourceId: meetingId,
+      });
+    }
+
+    const actionItemIds = await fetchRelationshipIdList(
+      sourceApiKey,
+      `/lifecycle-manager/v1/meetings/${meetingId}/action-items`,
+      "action_item_ids"
+    );
+    for (const actionItemId of actionItemIds) {
+      pushRelationship({
+        clientName: "",
+        type: "Meeting ↔ Action Item",
+        sourceRecord: meetingName,
+        targetRecord: actionItemNames.get(actionItemId) || "Action Item",
+        sourceSourceId: meetingId,
+        targetSourceId: actionItemId,
+      });
+    }
+
+    if (meeting.agenda_json) {
+      pushRelationship({
+        clientName: "",
+        type: "Meeting Notes",
+        sourceRecord: meetingName,
+        targetRecord: "Agenda / Notes",
+        sourceSourceId: meetingId,
+        targetSourceId: meetingId,
       });
     }
   }
@@ -1766,6 +1816,19 @@ async function createRelationships(
           status: "skipped",
           detail:
             "Goal ↔ Action Item relationship not directly supported by the API - linked via Goal ↔ Initiative instead.",
+        });
+        continue;
+      } else if (item.type === "Meeting Notes") {
+        const meetingId = idMaps.meetings.get(item.sourceSourceId);
+        log.push({
+          clientName,
+          type: item.type,
+          sourceRecord: item.sourceRecord,
+          targetRecord: item.targetRecord,
+          status: meetingId ? "created" : "skipped",
+          detail: meetingId
+            ? "Meeting notes migrated with agenda_json."
+            : "Linked destination record did not migrate",
         });
         continue;
       } else if (item.type === "Meeting ↔ Action Item") {
