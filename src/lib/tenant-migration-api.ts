@@ -28,6 +28,13 @@ export interface DestinationUser {
   active?: boolean;
 }
 
+function firstArray<T>(...values: unknown[]): T[] {
+  for (const value of values) {
+    if (Array.isArray(value)) return value as T[];
+  }
+  return [];
+}
+
 export type MigrationObjectType =
   | "initiatives"
   | "goals"
@@ -323,12 +330,13 @@ export async function fetchAllDestinationUsers(apiKey: string): Promise<Destinat
     {}
   );
 
-  const members: DestinationUser[] =
-    response.data ||
-    response.items ||
-    response.results ||
-    response.members ||
-    [];
+  const members: DestinationUser[] = firstArray<DestinationUser>(
+    response?.data,
+    response?.items,
+    response?.results,
+    response?.members,
+    response?.members?.data
+  );
 
   return members.filter((member) => member.active !== false);
 }
