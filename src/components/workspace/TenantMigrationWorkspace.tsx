@@ -403,13 +403,14 @@ export function TenantMigrationWorkspace() {
   const exportErrorsAsCsv = () => {
     if (!filteredErrors.length) return;
 
-    const header = ["Client", "Object Type", "Record", "Error Code", "Error Detail"];
+    const header = ["Client", "Object Type", "Record", "Error Code", "Error Detail", "Request Payload"];
     const rows = filteredErrors.map((entry) => [
       entry.clientName,
       entry.objectType,
       entry.recordName,
       entry.errorCode,
       entry.errorDetail,
+      entry.requestPayloadText || "",
     ]);
 
     const csv = [header, ...rows]
@@ -425,6 +426,29 @@ export function TenantMigrationWorkspace() {
     const link = document.createElement("a");
     link.href = url;
     link.download = "tenant-migration-errors.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportDebugAsJson = () => {
+    if (!filteredErrors.length) return;
+
+    const payload = filteredErrors.map((entry) => ({
+      client: entry.clientName,
+      objectType: entry.objectType,
+      record: entry.recordName,
+      errorCode: Number(entry.errorCode) || entry.errorCode,
+      errorDetail: entry.errorDetail,
+      endpoint: entry.endpoint || null,
+      method: entry.method || null,
+      request_payload: entry.requestPayload ?? null,
+    }));
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "tenant-migration-debug-export.json";
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -954,13 +978,22 @@ export function TenantMigrationWorkspace() {
                 </select>
               </div>
 
-              <button
-                onClick={exportErrorsAsCsv}
-                disabled={filteredErrors.length === 0}
-                className="rounded-md border border-border px-3 py-2 text-xs text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Export Error Log as CSV
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={exportErrorsAsCsv}
+                  disabled={filteredErrors.length === 0}
+                  className="rounded-md border border-border px-3 py-2 text-xs text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Export Error Log as CSV
+                </button>
+                <button
+                  onClick={exportDebugAsJson}
+                  disabled={filteredErrors.length === 0}
+                  className="rounded-md border border-border px-3 py-2 text-xs text-foreground transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Debug Export
+                </button>
+              </div>
             </div>
 
             <div className="overflow-hidden rounded-lg border border-border bg-card">

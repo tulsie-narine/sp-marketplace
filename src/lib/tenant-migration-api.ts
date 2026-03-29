@@ -79,6 +79,10 @@ export interface MigrationErrorEntry {
   errorCode: string;
   errorDetail: string;
   severity?: "error" | "warning";
+  endpoint?: string;
+  method?: string;
+  requestPayload?: Record<string, unknown> | unknown[] | null;
+  requestPayloadText?: string;
 }
 
 export interface RelationshipLogEntry {
@@ -217,6 +221,7 @@ function buildError(
 ): MigrationErrorEntry {
   const detail = error instanceof Error ? error.message : "Unknown error";
   const statusMatch = detail.match(/\b(\d{3})\b/);
+  const apiError = isRecord(error) ? error : null;
   return {
     clientName,
     objectType,
@@ -224,6 +229,13 @@ function buildError(
     errorCode: statusMatch?.[1] || "ERROR",
     errorDetail: detail,
     severity: "error",
+    endpoint: asText(apiError?.endpoint) || undefined,
+    method: asText(apiError?.method) || undefined,
+    requestPayload:
+      apiError && "requestPayload" in apiError
+        ? ((apiError.requestPayload as Record<string, unknown> | unknown[] | null | undefined) ?? null)
+        : undefined,
+    requestPayloadText: asText(apiError?.requestPayloadText) || undefined,
   };
 }
 
@@ -275,6 +287,38 @@ export function maskApiKey(value: string) {
   return `${value.slice(0, 7)}••••••${value.slice(-4)}`;
 }
 
+function buildFullApiUrl(endpoint: string) {
+  return `https://api.scalepad.com${endpoint}`;
+}
+
+function stringifyRequestPayload(body?: Record<string, unknown> | unknown[]) {
+  if (body === undefined) return null;
+  try {
+    return JSON.stringify(body);
+  } catch {
+    return JSON.stringify({ unserializable: true });
+  }
+}
+
+function buildApiError(
+  message: string,
+  endpoint: string,
+  method: string,
+  body?: Record<string, unknown> | unknown[]
+) {
+  const error = new Error(message) as Error & {
+    endpoint?: string;
+    method?: string;
+    requestPayload?: Record<string, unknown> | unknown[] | null;
+    requestPayloadText?: string | null;
+  };
+  error.endpoint = buildFullApiUrl(endpoint);
+  error.method = method;
+  error.requestPayload = body ?? null;
+  error.requestPayloadText = stringifyRequestPayload(body);
+  return error;
+}
+
 async function proxyCall<T = any>(
   apiKey: string,
   endpoint: string,
@@ -287,16 +331,16 @@ async function proxyCall<T = any>(
   });
 
   if (error) {
-    throw new Error(error.message || "Edge function error");
+    throw buildApiError(error.message || "Edge function error", endpoint, method, body);
   }
 
   if (data?.upstream_status && data.upstream_status >= 400) {
     const detail = data.errors?.[0]?.detail || data.error || `API returned ${data.upstream_status}`;
-    throw new Error(`${data.upstream_status}: ${detail}`);
+    throw buildApiError(`${data.upstream_status}: ${detail}`, endpoint, method, body);
   }
 
   if (data?.error) {
-    throw new Error(data.error);
+    throw buildApiError(data.error, endpoint, method, body);
   }
 
   return data;
