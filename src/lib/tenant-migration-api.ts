@@ -726,6 +726,35 @@ async function fetchDestinationMembers(
   return results;
 }
 
+async function findDestinationMemberIdByEmailViaApi(
+  apiKey: string,
+  email: string | null | undefined
+): Promise<string | null> {
+  const normalizedEmail = email?.trim().toLowerCase();
+  if (!normalizedEmail) return null;
+
+  const response = await proxyCallWithRetry<{
+    data?: Record<string, unknown>[];
+  }>(
+    apiKey,
+    "/core/v1/members",
+    "POST",
+    {
+      filter: {
+        "contact_info.email": `eq:${normalizedEmail}`,
+      },
+    }
+  );
+
+  const match = (response.data || []).find((member) => {
+    const memberEmail =
+      asText(member.contact_info?.email) || asText(member.email);
+    return memberEmail?.trim().toLowerCase() === normalizedEmail;
+  });
+
+  return asText(match?.id);
+}
+
 function findDestinationMemberIdByEmail(
   members: DestinationMember[],
   email: string | null | undefined
@@ -1217,12 +1246,14 @@ async function migrateRecord(
 
   if (type === "assessments") {
     const templateId = asText(record.assessment_template_id);
-    const evaluatorEmail =
-      extractAssessmentEvaluatorEmail(record) || actionItemAssigneeEmail || null;
-    const evaluatorUserId = findDestinationMemberIdByEmail(
-      destinationMembers,
-      evaluatorEmail
-    );
+    const preferredEvaluatorEmail =
+      actionItemAssigneeEmail || extractAssessmentEvaluatorEmail(record) || null;
+    const evaluatorUserId =
+      findDestinationMemberIdByEmail(destinationMembers, preferredEvaluatorEmail) ||
+      (await findDestinationMemberIdByEmailViaApi(
+        destinationApiKey,
+        preferredEvaluatorEmail
+      ));
 
     if (!templateId) {
       throw new Error(
