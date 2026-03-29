@@ -17,14 +17,11 @@ import {
   autoMatchClientMappings,
   buildInitialClientProgress,
   fetchAllClients,
-  fetchAllDestinationUsers,
-  getDestinationUserLabel,
   maskApiKey,
   OBJECT_LABELS,
   runTenantMigration,
   type ClientMapping,
   type ClientMigrationProgress,
-  type DestinationUser,
   type MigrationClient,
   type MigrationObjectType,
   type MigrationResult,
@@ -190,11 +187,9 @@ export function TenantMigrationWorkspace() {
   const [destinationApiKey] = useState(() => window.sessionStorage.getItem("sp_api_key") || "");
   const [sourceClients, setSourceClients] = useState<MigrationClient[]>([]);
   const [destinationClients, setDestinationClients] = useState<MigrationClient[]>([]);
-  const [destinationUsers, setDestinationUsers] = useState<DestinationUser[]>([]);
-  const [destinationUsersError, setDestinationUsersError] = useState<string | null>(null);
   const [clientMappings, setClientMappings] = useState<ClientMapping[]>([]);
   const [selectedObjects, setSelectedObjects] = useState<SelectedObjects>(DEFAULT_SELECTED_OBJECTS);
-  const [actionItemAssigneeId, setActionItemAssigneeId] = useState("");
+  const [actionItemAssigneeEmail, setActionItemAssigneeEmail] = useState("");
   const [migrationProgress, setMigrationProgress] = useState<ClientMigrationProgress[]>([]);
   const [migrationResult, setMigrationResult] = useState<MigrationResult | null>(null);
   const [loadingClients, setLoadingClients] = useState(false);
@@ -250,13 +245,6 @@ export function TenantMigrationWorkspace() {
     () => [...destinationClients].sort((a, b) => (a.name || "").localeCompare(b.name || "")),
     [destinationClients]
   );
-  const destinationUserOptions = useMemo(
-    () =>
-      currentScreen === 3
-        ? [...destinationUsers].sort((a, b) => getDestinationUserLabel(a).localeCompare(getDestinationUserLabel(b)))
-        : [],
-    [currentScreen, destinationUsers]
-  );
   const destinationLookup = useMemo(() => new Map(destinationClients.map((client) => [client.id, client])), [destinationClients]);
   const mappingLookup = useMemo(() => new Map(clientMappings.map((mapping) => [mapping.srcClientId, mapping])), [clientMappings]);
 
@@ -301,7 +289,6 @@ export function TenantMigrationWorkspace() {
     setLoadingClients(true);
     setLoadingMessage("Connecting to source tenant...");
     setScreenOneError(null);
-    setDestinationUsersError(null);
 
     try {
       const [destination, source] = await Promise.all([
@@ -309,29 +296,14 @@ export function TenantMigrationWorkspace() {
         fetchAllClients(sourceApiKey.trim()),
       ]);
 
-      let users: DestinationUser[] = [];
-      try {
-        users = await fetchAllDestinationUsers(destinationApiKey);
-      } catch (error) {
-        setDestinationUsersError(error instanceof Error ? error.message : "Failed to load destination users.");
-      }
-
       setDestinationClients(destination);
       setSourceClients(source);
-      setDestinationUsers(users);
       setClientMappings(autoMatchClientMappings(source, destination));
       setCurrentScreen(2);
       toast({
         title: "Clients loaded",
-        description: `Loaded ${source.length} source clients, ${destination.length} destination clients, and ${users.length} destination users.`,
+        description: `Loaded ${source.length} source clients and ${destination.length} destination clients.`,
       });
-      if (users.length === 0) {
-        toast({
-          title: "Destination users are unavailable",
-          description: "If Action Items are selected, the assignee dropdown will stay empty until the members list loads successfully.",
-          variant: "destructive",
-        });
-      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load clients";
       if (message.includes("403")) {
@@ -391,10 +363,10 @@ export function TenantMigrationWorkspace() {
       return;
     }
 
-    if (selectedObjects.actionItems && !actionItemAssigneeId) {
+    if (selectedObjects.actionItems && !actionItemAssigneeEmail.trim()) {
       toast({
-        title: "Choose an Action Item assignee",
-        description: "Select the destination user who should own migrated action items before starting the migration.",
+        title: "Enter an Action Item assignee email",
+        description: "Provide the default destination email address that should own migrated action items before starting the migration.",
         variant: "destructive",
       });
       return;
@@ -416,7 +388,7 @@ export function TenantMigrationWorkspace() {
         selectedObjects,
         sourceClients,
         destinationClients,
-        actionItemAssigneeId: selectedObjects.actionItems ? actionItemAssigneeId : null,
+        actionItemAssigneeEmail: selectedObjects.actionItems ? actionItemAssigneeEmail.trim() : null,
         onClientProgress: (clientIndex, progress) => {
           setMigrationProgress((prev) => prev.map((item, index) => (index === clientIndex ? progress : item)));
         },
@@ -471,11 +443,9 @@ export function TenantMigrationWorkspace() {
     setSourceApiKey("");
     setSourceClients([]);
     setDestinationClients([]);
-    setDestinationUsers([]);
-    setDestinationUsersError(null);
     setClientMappings([]);
     setSelectedObjects(DEFAULT_SELECTED_OBJECTS);
-    setActionItemAssigneeId("");
+    setActionItemAssigneeEmail("");
     setMigrationProgress([]);
     setMigrationResult(null);
     setMigrationRunning(false);
@@ -770,32 +740,17 @@ export function TenantMigrationWorkspace() {
       {selectedObjects.actionItems && (
         <div className="mt-5 rounded-md border border-border bg-surface-raised p-4">
           <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Assign All Action Items To
+            Default Action Item Assignee Email
           </label>
-          <select
-            value={actionItemAssigneeId}
-            onChange={(event) => setActionItemAssigneeId(event.target.value)}
-            className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-          >
-            <option value="">Select destination user...</option>
-            {destinationUserOptions.map((user) => (
-              <option key={user.id} value={user.id}>
-                {getDestinationUserLabel(user)}
-              </option>
-            ))}
-          </select>
-          {destinationUsersError && (
-            <p className="mt-2 text-xs text-destructive">
-              Could not load destination users: {destinationUsersError}
-            </p>
-          )}
-          {!destinationUsersError && destinationUserOptions.length === 0 && (
-            <p className="mt-2 text-xs text-warning">
-              No destination users were returned by the List Members API for this tenant.
-            </p>
-          )}
+          <input
+            type="email"
+            value={actionItemAssigneeEmail}
+            onChange={(event) => setActionItemAssigneeEmail(event.target.value)}
+            placeholder="name@company.com"
+            className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
           <p className="mt-2 text-xs text-muted-foreground">
-            Source assignee IDs cannot be reused across tenants, so migrated action items will be reassigned to this destination user.
+            Source assignee IDs cannot be reused across tenants, so migrated action items will be reassigned to this default destination email.
           </p>
         </div>
       )}

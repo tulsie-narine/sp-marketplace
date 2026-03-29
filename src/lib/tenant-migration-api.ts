@@ -12,33 +12,6 @@ export interface MigrationClient {
   label?: string;
 }
 
-export interface DestinationUser {
-  id: string | number;
-  name?: {
-    first?: string;
-    last?: string;
-    middle?: string;
-    full?: string;
-  };
-  first_name?: string;
-  last_name?: string;
-  middle_name?: string;
-  first?: string;
-  middle?: string;
-  last?: string;
-  full?: string;
-  name?: string;
-  full_name?: string;
-  email?: string;
-  primary_email?: string;
-  contact_info?: {
-    email?: string;
-    ext?: string;
-    phone?: string;
-  };
-  active?: boolean;
-}
-
 function firstArray<T>(...values: unknown[]): T[] {
   for (const value of values) {
     if (Array.isArray(value)) return value as T[];
@@ -161,7 +134,7 @@ export interface RunMigrationParams {
   selectedObjects: SelectedObjects;
   sourceClients: MigrationClient[];
   destinationClients: MigrationClient[];
-  actionItemAssigneeId?: string | null;
+  actionItemAssigneeEmail?: string | null;
   onClientProgress: (clientIndex: number, progress: ClientMigrationProgress) => void;
 }
 
@@ -368,33 +341,6 @@ export async function fetchAllClients(apiKey: string): Promise<MigrationClient[]
   );
 }
 
-export async function fetchAllDestinationUsers(apiKey: string): Promise<DestinationUser[]> {
-  const response = await proxyCallWithRetry<any>(
-    apiKey,
-    "/core/v1/members",
-    "POST",
-    {}
-  );
-
-  const members: DestinationUser[] = firstArray<DestinationUser>(
-    response?.data,
-    response?.items,
-    response?.results,
-    response?.members,
-    response?.members?.data
-  );
-
-  return members.filter(
-    (member): member is DestinationUser =>
-      isRecord(member) &&
-      (typeof member.id === "string" || typeof member.id === "number") &&
-      member.active !== false
-  ).map((member) => ({
-    ...member,
-    id: String(member.id),
-  }));
-}
-
 function omitFields(record: Record<string, unknown>, fields: string[]) {
   const clone = { ...record };
   for (const field of fields) {
@@ -439,28 +385,6 @@ function getRecordName(record: Record<string, any>, fallback: string) {
   );
 }
 
-export function getDestinationUserLabel(user: DestinationUser) {
-  const fullName =
-    asText(user.name?.full) ||
-    [
-      asText(user.name?.first) || asText(user.first_name) || asText(user.first),
-      asText(user.name?.last) || asText(user.last_name) || asText(user.last),
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .trim() ||
-    asText(user.full) ||
-    asText(user.full_name);
-
-  const email =
-    asText(user.contact_info?.email) ||
-    asText(user.email) ||
-    asText(user.primary_email);
-
-  if (fullName && email) return `${fullName} [${email}]`;
-  return String(fullName || email || asText(user.id) || "Unknown user");
-}
-
 function resolveClientRouteKey(client: MigrationClient | Record<string, any>) {
   return (
     client.client_id ||
@@ -474,19 +398,20 @@ function resolveClientRouteKey(client: MigrationClient | Record<string, any>) {
 function buildActionItemBody(
   destinationClientId: string,
   record: Record<string, any>,
-  actionItemAssigneeId?: string | null
+  actionItemAssigneeEmail?: string | null
 ) {
   const body = clientWriteBody(destinationClientId, record, [
     "completion_status",
     "assigned_user_ids",
     "assigned_users",
     "assigned_user_id",
+    "assigned_user_emails",
   ]);
 
-  if (actionItemAssigneeId) {
+  if (actionItemAssigneeEmail) {
     return {
       ...body,
-      assigned_user_ids: [{ id: actionItemAssigneeId }],
+      assigned_user_ids: [{ email: actionItemAssigneeEmail }],
     };
   }
 
@@ -658,7 +583,7 @@ async function migrateRecord(
   destinationApiKey: string,
   destinationClient: MigrationClient,
   record: Record<string, any>,
-  actionItemAssigneeId?: string | null
+  actionItemAssigneeEmail?: string | null
 ): Promise<{ newId?: string; recordName: string; relationships: PendingRelationship[] }> {
   const destinationClientId = destinationClient.id;
   const recordName = getRecordName(record, `Unnamed ${OBJECT_LABELS[type]}`);
@@ -738,7 +663,7 @@ async function migrateRecord(
   }
 
   if (type === "actionItems") {
-    const body = buildActionItemBody(destinationClientId, record, actionItemAssigneeId);
+    const body = buildActionItemBody(destinationClientId, record, actionItemAssigneeEmail);
     const created = await proxyCallWithRetry<{ id: string }>(
       destinationApiKey,
       "/lifecycle-manager/v1/action-items",
@@ -959,7 +884,7 @@ export async function runTenantMigration({
   selectedObjects,
   sourceClients,
   destinationClients,
-  actionItemAssigneeId,
+  actionItemAssigneeEmail,
   onClientProgress,
 }: RunMigrationParams): Promise<MigrationResult> {
   const clientSummaries: ClientSummary[] = [];
@@ -1028,7 +953,7 @@ export async function runTenantMigration({
             destinationApiKey,
             destinationClient,
             record,
-            actionItemAssigneeId
+            actionItemAssigneeEmail
           );
           progress.objects[type].succeeded += 1;
           totalCreated += 1;
