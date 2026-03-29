@@ -932,12 +932,28 @@ async function fetchObjectRecords(
   const detailed: Record<string, any>[] = [];
   for (const item of list) {
     await sleep(DEFAULT_DELAY_MS);
-    detailed.push(
-      await proxyCallWithRetry<Record<string, any>>(
-        apiKey,
-        `${endpointBase}/${item.id}`
-      )
+    const detailResponse = await proxyCallWithRetry<Record<string, any>>(
+      apiKey,
+      `${endpointBase}/${item.id}`
     );
+    const detailRecord =
+      (type === "meetings" &&
+        isRecord(detailResponse.meeting) &&
+        detailResponse.meeting) ||
+      (type === "assessments" &&
+        isRecord(detailResponse.assessment) &&
+        detailResponse.assessment) ||
+      detailResponse;
+
+    detailed.push({
+      ...item,
+      ...detailRecord,
+      ...(type === "meetings" &&
+      isRecord(detailRecord.meeting_type) &&
+      !detailRecord.type
+        ? { type: asText(detailRecord.meeting_type.label) || null }
+        : {}),
+    });
   }
   return detailed;
 }
