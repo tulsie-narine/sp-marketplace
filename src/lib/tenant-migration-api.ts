@@ -465,6 +465,7 @@ function getRecordName(record: Record<string, any>, fallback: string) {
   return (
     record.name ||
     record.title ||
+    record.description ||
     record.topic ||
     record.display_name ||
     record.label ||
@@ -1641,7 +1642,7 @@ async function createRelationships(
           sourceRecord: item.sourceRecord,
           targetRecord: item.targetRecord,
           status: "skipped",
-          detail: "Source record did not migrate",
+          detail: "Linked destination record did not migrate",
         });
         continue;
       }
