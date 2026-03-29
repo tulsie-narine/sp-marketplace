@@ -39,6 +39,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object";
 }
 
+function asText(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  if (typeof value === "number") {
+    return String(value);
+  }
+
+  if (isRecord(value)) {
+    return (
+      asText(value.value) ||
+      asText(value.label) ||
+      asText(value.name) ||
+      asText(value.full_name) ||
+      asText(value.email) ||
+      null
+    );
+  }
+
+  return null;
+}
+
 export type MigrationObjectType =
   | "initiatives"
   | "goals"
@@ -406,17 +430,21 @@ function getRecordName(record: Record<string, any>, fallback: string) {
 
 export function getDestinationUserLabel(user: DestinationUser) {
   const fullName =
-    user.full ||
-    user.name ||
-    user.full_name ||
-    [user.first_name || user.first, user.middle_name || user.middle, user.last_name || user.last]
+    asText(user.full) ||
+    asText(user.name) ||
+    asText(user.full_name) ||
+    [
+      asText(user.first_name) || asText(user.first),
+      asText(user.middle_name) || asText(user.middle),
+      asText(user.last_name) || asText(user.last),
+    ]
       .filter(Boolean)
       .join(" ")
       .trim();
 
-  const email = user.email || user.primary_email;
+  const email = asText(user.email) || asText(user.primary_email);
   if (fullName && email) return `${fullName} (${email})`;
-  return String(fullName || email || user.id || "Unknown user");
+  return String(fullName || email || asText(user.id) || "Unknown user");
 }
 
 function resolveClientRouteKey(client: MigrationClient | Record<string, any>) {
