@@ -307,34 +307,6 @@ async function fetchAllPages<T>(
   return results;
 }
 
-async function fetchAllPostPages<T>(
-  apiKey: string,
-  endpoint: string,
-  bodyBuilder: (cursor: string | null) => Record<string, unknown>
-): Promise<T[]> {
-  const results: T[] = [];
-  let cursor: string | null = null;
-
-  do {
-    const response = await proxyCallWithRetry<any>(
-      apiKey,
-      endpoint,
-      "POST",
-      bodyBuilder(cursor)
-    );
-    const items =
-      response.data ||
-      response.items ||
-      response.results ||
-      response.members ||
-      [];
-    results.push(...items);
-    cursor = response.next_cursor || null;
-  } while (cursor);
-
-  return results;
-}
-
 export async function fetchAllClients(apiKey: string): Promise<MigrationClient[]> {
   return fetchAllPages<MigrationClient>(apiKey, (cursor) => {
     const params = new URLSearchParams({ page_size: "200", sort: "name" });
@@ -344,15 +316,19 @@ export async function fetchAllClients(apiKey: string): Promise<MigrationClient[]
 }
 
 export async function fetchAllDestinationUsers(apiKey: string): Promise<DestinationUser[]> {
-  const members = await fetchAllPostPages<DestinationUser>(
+  const response = await proxyCallWithRetry<any>(
     apiKey,
     "/core/v1/members",
-    (cursor) => {
-      const body: Record<string, unknown> = { page_size: 200 };
-      if (cursor) body.cursor = cursor;
-      return body;
-    }
+    "POST",
+    {}
   );
+
+  const members: DestinationUser[] =
+    response.data ||
+    response.items ||
+    response.results ||
+    response.members ||
+    [];
 
   return members.filter((member) => member.active !== false);
 }
