@@ -156,11 +156,11 @@ const DEFAULT_DELAY_MS = 120;
 const OBJECT_ORDER: Exclude<MigrationObjectType, "relationships">[] = [
   "initiatives",
   "goals",
+  "meetings",
   "notes",
   "actionItems",
   "contracts",
   "assessments",
-  "meetings",
   "deliverables",
 ];
 
@@ -910,74 +910,64 @@ function collectRelationships(
   type: Exclude<MigrationObjectType, "relationships">,
   record: Record<string, any>
 ): PendingRelationship[] {
+  if (type !== "actionItems") return [];
+
   const recordName = getRecordName(record, "Unnamed record");
+  const actionItemId =
+    asText(record.engagement_action_id) || asText(record.id) || null;
 
-  if (type === "goals") {
-    return [
-      ...extractIds(record.initiatives || record.linked_initiatives).map(
-        (targetId) => ({
-          clientName: "",
-          type: "Goal <-> Initiative",
-          sourceRecord: recordName,
-          targetRecord: "Initiative",
-          sourceSourceId: record.id,
-          targetSourceId: targetId,
-        })
-      ),
-      ...extractIds(record.meetings || record.linked_meetings).map(
-        (targetId) => ({
-          clientName: "",
-          type: "Goal <-> Meeting",
-          sourceRecord: recordName,
-          targetRecord: "Meeting",
-          sourceSourceId: record.id,
-          targetSourceId: targetId,
-        })
-      ),
-    ];
-  }
+  if (!actionItemId) return [];
 
-  if (type === "initiatives") {
-    return [
-      ...extractIds(record.meetings || record.linked_meetings).map(
-        (targetId) => ({
-          clientName: "",
-          type: "Initiative <-> Meeting",
-          sourceRecord: recordName,
-          targetRecord: "Meeting",
-          sourceSourceId: record.id,
-          targetSourceId: targetId,
-        })
-      ),
-      ...extractIds(
-        record.action_items ||
-          record.actionItems ||
-          record.linked_action_items
-      ).map((targetId) => ({
-        clientName: "",
-        type: "Initiative <-> Action Item",
-        sourceRecord: recordName,
-        targetRecord: "Action Item",
-        sourceSourceId: record.id,
-        targetSourceId: targetId,
-      })),
-    ];
-  }
+  const relationships: PendingRelationship[] = [];
 
-  if (type === "meetings") {
-    return extractIds(
-      record.action_items || record.actionItems || record.linked_action_items
-    ).map((targetId) => ({
+  const initiativeLink = Array.isArray(record.initiative_links)
+    ? record.initiative_links[0]
+    : record.initiative_links;
+  const initiativeId =
+    asText(initiativeLink?.initiative_id) || asText(initiativeLink?.id) || null;
+  if (initiativeId) {
+    relationships.push({
       clientName: "",
-      type: "Meeting <-> Action Item",
+      type: "Initiative ↔ Action Item",
       sourceRecord: recordName,
-      targetRecord: "Action Item",
-      sourceSourceId: record.id,
-      targetSourceId: targetId,
-    }));
+      targetRecord: "Initiative",
+      sourceSourceId: initiativeId,
+      targetSourceId: actionItemId,
+    });
   }
 
-  return [];
+  const goalLinks = Array.isArray(record.goal_links) ? record.goal_links : [];
+  for (const goalLink of goalLinks) {
+    const goalId = asText(goalLink?.goal_id) || asText(goalLink?.id) || null;
+    if (goalId) {
+      relationships.push({
+        clientName: "",
+        type: "Goal ↔ Action Item",
+        sourceRecord: recordName,
+        targetRecord: "Goal",
+        sourceSourceId: goalId,
+        targetSourceId: actionItemId,
+      });
+    }
+  }
+
+  const meetingLink = Array.isArray(record.meeting_links)
+    ? record.meeting_links[0]
+    : record.meeting_links;
+  const meetingId =
+    asText(meetingLink?.meeting_id) || asText(meetingLink?.id) || null;
+  if (meetingId) {
+    relationships.push({
+      clientName: "",
+      type: "Meeting ↔ Action Item",
+      sourceRecord: recordName,
+      targetRecord: "Meeting",
+      sourceSourceId: meetingId,
+      targetSourceId: actionItemId,
+    });
+  }
+
+  return relationships;
 }
 
 async function fetchObjectRecords(
@@ -1581,35 +1571,61 @@ async function createRelationships(
     try {
       let endpoint: string | null = null;
 
-      if (item.type === "Goal <-> Initiative") {
+      if (item.type === "Goal ↔ Initiative") {
         const goalId = idMaps.goals.get(item.sourceSourceId);
         const initiativeId = idMaps.initiatives.get(item.targetSourceId);
-        endpoint =
-          goalId && initiativeId
-            ? `/lifecycle-manager/v1/goals/${goalId}/initiatives/${initiativeId}`
-            : null;
-      } else if (item.type === "Goal <-> Meeting") {
+        if (!goalId || !initiativeId) {
+          endpoint = null;
+        } else {
+          await proxyCallWithRetry(
+            destinationApiKey,
+            `/lifecycle-manager/v1/goals/${goalId}/initiatives/${initiativeId}`,
+            "PUT"
+          );
+          await sleep(DEFAULT_DELAY_MS);
+          await proxyCallWithRetry(
+            destinationApiKey,
+            `/lifecycle-manager/v1/initiatives/${initiativeId}/goals/${goalId}`,
+            "PUT"
+          );
+        }
+      } else if (item.type === "Goal ↔ Meeting") {
         const goalId = idMaps.goals.get(item.sourceSourceId);
         const meetingId = idMaps.meetings.get(item.targetSourceId);
         endpoint =
           goalId && meetingId
             ? `/lifecycle-manager/v1/goals/${goalId}/meetings/${meetingId}`
             : null;
-      } else if (item.type === "Initiative <-> Meeting") {
+      } else if (item.type === "Initiative ↔ Meeting") {
         const initiativeId = idMaps.initiatives.get(item.sourceSourceId);
         const meetingId = idMaps.meetings.get(item.targetSourceId);
         endpoint =
           initiativeId && meetingId
             ? `/lifecycle-manager/v1/initiatives/${initiativeId}/meetings/${meetingId}`
             : null;
-      } else if (item.type === "Initiative <-> Action Item") {
+      } else if (item.type === "Initiative ↔ Action Item") {
         const initiativeId = idMaps.initiatives.get(item.sourceSourceId);
         const actionItemId = idMaps.actionItems.get(item.targetSourceId);
         endpoint =
           initiativeId && actionItemId
             ? `/lifecycle-manager/v1/initiatives/${initiativeId}/action-items/${actionItemId}`
             : null;
-      } else if (item.type === "Meeting <-> Action Item") {
+      } else if (item.type === "Goal ↔ Action Item") {
+        const goalId = idMaps.goals.get(item.sourceSourceId);
+        if (!goalId) {
+          continue;
+        }
+        log.push({
+          clientName,
+          type: item.type,
+          sourceRecord: item.sourceRecord,
+          targetRecord: item.targetRecord,
+          status: "skipped",
+          detail:
+            "Goal ↔ Action Item relationship not directly supported by the API - linked via Goal ↔ Initiative instead.",
+        });
+        continue;
+      } else if (item.type === "Meeting ↔ Action Item") {
         const meetingId = idMaps.meetings.get(item.sourceSourceId);
         const actionItemId = idMaps.actionItems.get(item.targetSourceId);
         endpoint =
