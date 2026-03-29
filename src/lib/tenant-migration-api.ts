@@ -1905,6 +1905,10 @@ export async function runTenantMigration({
           }
           if (type === "actionItems" && result.newId) {
             idMaps.actionItems.set(record.id, result.newId);
+            const engagementActionId = asText(record.engagement_action_id);
+            if (engagementActionId) {
+              idMaps.actionItems.set(engagementActionId, result.newId);
+            }
           }
           if (type === "meetings" && result.newId) {
             idMaps.meetings.set(record.id, result.newId);
