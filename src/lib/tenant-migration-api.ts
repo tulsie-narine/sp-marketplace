@@ -35,6 +35,10 @@ function firstArray<T>(...values: unknown[]): T[] {
   return [];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
+}
+
 export type MigrationObjectType =
   | "initiatives"
   | "goals"
@@ -315,11 +319,18 @@ async function fetchAllPages<T>(
 }
 
 export async function fetchAllClients(apiKey: string): Promise<MigrationClient[]> {
-  return fetchAllPages<MigrationClient>(apiKey, (cursor) => {
+  const clients = await fetchAllPages<MigrationClient>(apiKey, (cursor) => {
     const params = new URLSearchParams({ page_size: "200", sort: "name" });
     if (cursor) params.set("cursor", cursor);
     return `/core/v1/clients?${params.toString()}`;
   });
+
+  return clients.filter(
+    (client): client is MigrationClient =>
+      isRecord(client) &&
+      typeof client.id === "string" &&
+      typeof client.name === "string"
+  );
 }
 
 export async function fetchAllDestinationUsers(apiKey: string): Promise<DestinationUser[]> {
@@ -338,7 +349,12 @@ export async function fetchAllDestinationUsers(apiKey: string): Promise<Destinat
     response?.members?.data
   );
 
-  return members.filter((member) => member.active !== false);
+  return members.filter(
+    (member): member is DestinationUser =>
+      isRecord(member) &&
+      (typeof member.id === "string" || typeof member.id === "number") &&
+      member.active !== false
+  );
 }
 
 function omitFields(record: Record<string, unknown>, fields: string[]) {

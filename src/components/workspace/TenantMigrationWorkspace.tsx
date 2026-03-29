@@ -247,12 +247,15 @@ export function TenantMigrationWorkspace() {
   const pagedSourceClients = filteredSourceClients.slice((sourcePage - 1) * PAGE_SIZE, sourcePage * PAGE_SIZE);
 
   const destinationOptions = useMemo(
-    () => [...destinationClients].sort((a, b) => a.name.localeCompare(b.name)),
+    () => [...destinationClients].sort((a, b) => (a.name || "").localeCompare(b.name || "")),
     [destinationClients]
   );
   const destinationUserOptions = useMemo(
-    () => [...destinationUsers].sort((a, b) => getDestinationUserLabel(a).localeCompare(getDestinationUserLabel(b))),
-    [destinationUsers]
+    () =>
+      currentScreen === 3
+        ? [...destinationUsers].sort((a, b) => getDestinationUserLabel(a).localeCompare(getDestinationUserLabel(b)))
+        : [],
+    [currentScreen, destinationUsers]
   );
   const destinationLookup = useMemo(() => new Map(destinationClients.map((client) => [client.id, client])), [destinationClients]);
   const mappingLookup = useMemo(() => new Map(clientMappings.map((mapping) => [mapping.srcClientId, mapping])), [clientMappings]);
