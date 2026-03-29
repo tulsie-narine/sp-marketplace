@@ -1682,21 +1682,10 @@ async function createRelationships(
       if (item.type === "Goal ↔ Initiative") {
         const goalId = idMaps.goals.get(item.sourceSourceId);
         const initiativeId = idMaps.initiatives.get(item.targetSourceId);
-        if (!goalId || !initiativeId) {
-          endpoint = null;
-        } else {
-          await proxyCallWithRetry(
-            destinationApiKey,
-            `/lifecycle-manager/v1/goals/${goalId}/initiatives/${initiativeId}`,
-            "PUT"
-          );
-          await sleep(DEFAULT_DELAY_MS);
-          await proxyCallWithRetry(
-            destinationApiKey,
-            `/lifecycle-manager/v1/initiatives/${initiativeId}/goals/${goalId}`,
-            "PUT"
-          );
-        }
+        endpoint =
+          goalId && initiativeId
+            ? `/lifecycle-manager/v1/goals/${goalId}/initiatives/${initiativeId}`
+            : null;
       } else if (item.type === "Goal ↔ Meeting") {
         const goalId = idMaps.goals.get(item.sourceSourceId);
         const meetingId = idMaps.meetings.get(item.targetSourceId);
