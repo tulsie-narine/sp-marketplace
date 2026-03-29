@@ -85,6 +85,7 @@ export interface MigrationErrorEntry {
   recordName: string;
   errorCode: string;
   errorDetail: string;
+  severity?: "error" | "warning";
 }
 
 export interface RelationshipLogEntry {
@@ -224,6 +225,23 @@ function buildError(
     recordName,
     errorCode: statusMatch?.[1] || "ERROR",
     errorDetail: detail,
+    severity: "error",
+  };
+}
+
+function buildWarning(
+  clientName: string,
+  objectType: string,
+  recordName: string,
+  detail: string
+): MigrationErrorEntry {
+  return {
+    clientName,
+    objectType,
+    recordName,
+    errorCode: "WARN",
+    errorDetail: detail,
+    severity: "warning",
   };
 }
 
@@ -427,6 +445,43 @@ function extractMemberEmail(member: Record<string, any>): string | null {
   );
 }
 
+function extractFirstEmail(items: unknown): string | null {
+  if (!Array.isArray(items)) return null;
+  for (const item of items) {
+    const email =
+      (isRecord(item) &&
+        (asText(item.email) ||
+          asText(item.contact_info?.email) ||
+          asText(item.user?.email) ||
+          asText(item.member?.email))) ||
+      null;
+    if (email) return email;
+  }
+  return null;
+}
+
+function extractActionItemAssigneeEmail(record: Record<string, any>): string | null {
+  return (
+    extractFirstEmail(record.assigned_user_ids) ||
+    extractFirstEmail(record.assigned_users) ||
+    extractFirstEmail(record.assignees) ||
+    asText(record.assigned_user_email) ||
+    asText(record.assignee_email) ||
+    null
+  );
+}
+
+function extractAssessmentEvaluatorEmail(record: Record<string, any>): string | null {
+  return (
+    extractMemberEmail(record.completed_by || {}) ||
+    extractMemberEmail(record.evaluate_user || {}) ||
+    extractMemberEmail(record.completed_by_user || {}) ||
+    asText(record.completed_by_email) ||
+    asText(record.evaluate_user_email) ||
+    null
+  );
+}
+
 function isAssigneeResolutionError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const message = error.message.toLowerCase();
@@ -434,16 +489,35 @@ function isAssigneeResolutionError(error: unknown): boolean {
     message.includes("assigned_user_ids") ||
     message.includes("assigned user") ||
     message.includes("email") ||
-    message.startsWith("404:")
+    message.startsWith("404:") ||
+    message.startsWith("500:")
   );
 }
 
-async function fetchSourceMemberEmail(
-  apiKey: string,
-  memberId: string
-): Promise<string | null> {
-  const member = await proxyCallWithRetry<Record<string, any>>(apiKey, `/core/v1/members/${memberId}`);
-  return isRecord(member) ? extractMemberEmail(member) : null;
+function isIsoDateTime(value: unknown): value is string {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+}
+
+function normalizeDueAt(value: unknown): string | null {
+  return isIsoDateTime(value) ? value : null;
+}
+
+function resolveShortClientId(client: MigrationClient | Record<string, any>): string | null {
+  const candidates = [
+    asText(client.client_id),
+    asText(client.client_number),
+    asText(client.key),
+    asText(client.reference),
+    asText(client.label),
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate && candidate.length <= 16) {
+      return candidate;
+    }
+  }
+
+  return null;
 }
 
 function buildActionItemBody(
@@ -459,15 +533,24 @@ function buildActionItemBody(
     "assigned_user_emails",
   ]);
 
+  const description = asText(record.description) || "Migrated action item";
+  const dueAt = normalizeDueAt(record.due_at);
+
   if (assigneeEmail) {
     return {
       ...body,
+      description,
+      due_at: dueAt,
       assigned_user_ids: [{ email: assigneeEmail }],
     };
   }
 
   delete (body as Record<string, unknown>).assigned_user_ids;
-  return body;
+  return {
+    ...body,
+    description,
+    due_at: dueAt,
+  };
 }
 
 function buildContractCreatePayload(record: Record<string, any>) {
@@ -488,6 +571,10 @@ function buildContractCreatePayload(record: Record<string, any>) {
       record.description ||
       record.summary ||
       "",
+    billing_start_at:
+      nestedPayload.billing_start_at ||
+      record.billing_start_at ||
+      null,
   };
 }
 
@@ -575,7 +662,10 @@ async function fetchObjectRecords(
   client: MigrationClient
 ): Promise<Record<string, any>[]> {
   if (type === "deliverables") {
-    const clientRouteKey = resolveClientRouteKey(client);
+    const clientRouteKey = resolveShortClientId(client);
+    if (!clientRouteKey) {
+      throw new Error("Deliverables skipped — could not resolve short client ID from source client record");
+    }
     const deliverables = await fetchAllPages<Record<string, any>>(apiKey, (cursor) => {
       const params = new URLSearchParams({ page_size: "100" });
       if (cursor) params.set("cursor", cursor);
@@ -631,14 +721,14 @@ function getIdMaps() {
 
 async function migrateRecord(
   type: Exclude<MigrationObjectType, "relationships">,
-  sourceApiKey: string,
   destinationApiKey: string,
   destinationClient: MigrationClient,
   record: Record<string, any>,
   actionItemAssigneeEmail?: string | null
-): Promise<{ newId?: string; recordName: string; relationships: PendingRelationship[] }> {
+): Promise<{ newId?: string; recordName: string; relationships: PendingRelationship[]; warnings: MigrationErrorEntry[] }> {
   const destinationClientId = destinationClient.id;
   const recordName = getRecordName(record, `Unnamed ${OBJECT_LABELS[type]}`);
+  const warnings: MigrationErrorEntry[] = [];
 
   if (type === "initiatives") {
     const created = await proxyCallWithRetry<{ id: string }>(
@@ -675,6 +765,7 @@ async function migrateRecord(
       newId: created.id,
       recordName,
       relationships: collectRelationships(type, record),
+      warnings,
     };
   }
 
@@ -698,6 +789,7 @@ async function migrateRecord(
       newId: created.id,
       recordName,
       relationships: collectRelationships(type, record),
+      warnings,
     };
   }
 
@@ -711,31 +803,18 @@ async function migrateRecord(
     );
     await sleep(DEFAULT_DELAY_MS);
     await proxyCallWithRetry(destinationApiKey, `/lifecycle-manager/v1/notes/${created.id}`, "PUT", body);
-    return { newId: created.id, recordName, relationships: [] };
+    return { newId: created.id, recordName, relationships: [], warnings };
   }
 
   if (type === "actionItems") {
-    const sourceMemberId = extractFirstAssignedMemberId(record);
-    let sourceAssigneeEmail: string | null = null;
-
-    if (sourceMemberId) {
-      try {
-        sourceAssigneeEmail = await fetchSourceMemberEmail(sourceApiKey, sourceMemberId);
-      } catch (error) {
-        if (!actionItemAssigneeEmail) {
-          throw new Error("Could not resolve assignee - no default set");
-        }
-      }
-    }
-
+    const sourceAssigneeEmail = extractActionItemAssigneeEmail(record);
     const assigneeEmail = sourceAssigneeEmail || actionItemAssigneeEmail || null;
     if (!assigneeEmail) {
-      throw new Error("Could not resolve assignee - no default set");
+      throw new Error("Skipped — no assignee email available and no default set");
     }
 
     let body = buildActionItemBody(destinationClientId, record, assigneeEmail);
     let created: { id: string };
-
     try {
       created = await proxyCallWithRetry<{ id: string }>(
         destinationApiKey,
@@ -745,14 +824,12 @@ async function migrateRecord(
       );
     } catch (error) {
       const canRetryWithDefault =
+        Boolean(sourceAssigneeEmail) &&
         Boolean(actionItemAssigneeEmail) &&
-        actionItemAssigneeEmail !== assigneeEmail &&
+        sourceAssigneeEmail !== actionItemAssigneeEmail &&
         isAssigneeResolutionError(error);
 
       if (!canRetryWithDefault) {
-        if (isAssigneeResolutionError(error) && !actionItemAssigneeEmail) {
-          throw new Error("Could not resolve assignee - no default set");
-        }
         throw error;
       }
 
@@ -780,13 +857,29 @@ async function migrateRecord(
       newId: created.id,
       recordName,
       relationships: collectRelationships(type, record),
+      warnings,
     };
   }
 
   if (type === "contracts") {
+    const billingStartAt = asText(record.billing_start_at) || new Date().toISOString();
+    if (!asText(record.billing_start_at)) {
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.contracts,
+          recordName,
+          "billing_start_at was missing on source — defaulted to today"
+        )
+      );
+    }
     const body = {
       client_key: { id: destinationClientId },
-      create_payload: buildContractCreatePayload(record),
+      billing_start_at: billingStartAt,
+      create_payload: {
+        ...buildContractCreatePayload(record),
+        billing_start_at: billingStartAt,
+      },
     };
     const created = await proxyCallWithRetry<{ id: string }>(
       destinationApiKey,
@@ -796,7 +889,7 @@ async function migrateRecord(
     );
     await sleep(DEFAULT_DELAY_MS);
     await proxyCallWithRetry(destinationApiKey, `/lifecycle-manager/v1/contracts/${created.id}`, "PUT", body);
-    return { newId: created.id, recordName, relationships: [] };
+    return { newId: created.id, recordName, relationships: [], warnings };
   }
 
   if (type === "assessments") {
@@ -821,15 +914,27 @@ async function migrateRecord(
     }
     const answers = record.answered_items || record.answers;
     if (answers) {
-      await sleep(DEFAULT_DELAY_MS);
-      await proxyCallWithRetry(
-        destinationApiKey,
-        `/lifecycle-manager/v1/assessments/${created.id}/evaluate`,
-        "PUT",
-        { answers }
-      );
+      const evaluatorUserId = extractAssessmentEvaluatorEmail(record) || actionItemAssigneeEmail || null;
+      if (evaluatorUserId) {
+        await sleep(DEFAULT_DELAY_MS);
+        await proxyCallWithRetry(
+          destinationApiKey,
+          `/lifecycle-manager/v1/assessments/${created.id}/evaluate`,
+          "PUT",
+          { answers, evaluate_user_id: evaluatorUserId }
+        );
+      } else {
+        warnings.push(
+          buildWarning(
+            destinationClient.name,
+            OBJECT_LABELS.assessments,
+            recordName,
+            "Assessment created but answers not replayed — no evaluator user ID could be resolved"
+          )
+        );
+      }
     }
-    return { newId: created.id, recordName, relationships: [] };
+    return { newId: created.id, recordName, relationships: [], warnings };
   }
 
   if (type === "meetings") {
@@ -840,10 +945,22 @@ async function migrateRecord(
       "attendee_contacts",
       "title",
     ]);
+    const sourceType = asText(record.type);
     const titledBody = {
       ...body,
       title: record.title || record.name || record.subject || record.topic || "Migrated Meeting",
+      type: sourceType || "General",
     };
+    if (!sourceType) {
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.meetings,
+          recordName,
+          "Meeting type was missing on source — defaulted to 'General'"
+        )
+      );
+    }
     const created = await proxyCallWithRetry<{ id: string }>(
       destinationApiKey,
       "/lifecycle-manager/v1/meetings",
@@ -887,19 +1004,24 @@ async function migrateRecord(
       newId: created.id,
       recordName,
       relationships: collectRelationships(type, record),
+      warnings,
     };
   }
 
+  const destinationClientRouteKey = resolveShortClientId(destinationClient);
+  if (!destinationClientRouteKey) {
+    throw new Error("Deliverables skipped — could not resolve short client ID from source client record");
+  }
   const body = omitFields(record, ["id", "client", "client_id", "client_key", "record_created_at", "record_updated_at"]);
   const created = await proxyCallWithRetry<{ id: string }>(
     destinationApiKey,
-    `/lifecycle-manager/v1/clients/${resolveClientRouteKey(destinationClient)}/deliverables`,
+    `/lifecycle-manager/v1/clients/${destinationClientRouteKey}/deliverables`,
     "POST",
     body
   );
   await sleep(DEFAULT_DELAY_MS);
   await proxyCallWithRetry(destinationApiKey, `/lifecycle-manager/v1/deliverables/${created.id}`, "PATCH", body);
-  return { newId: created.id, recordName, relationships: [] };
+  return { newId: created.id, recordName, relationships: [], warnings };
 }
 
 async function createRelationships(
@@ -1045,7 +1167,6 @@ export async function runTenantMigration({
         try {
           const result = await migrateRecord(
             type,
-            sourceApiKey,
             destinationApiKey,
             destinationClient,
             record,
@@ -1053,6 +1174,10 @@ export async function runTenantMigration({
           );
           progress.objects[type].succeeded += 1;
           totalCreated += 1;
+          if (result.warnings.length > 0) {
+            progress.objects[type].errors.push(...result.warnings);
+            allErrors.push(...result.warnings);
+          }
 
           if (type === "initiatives" && result.newId) idMaps.initiatives.set(record.id, result.newId);
           if (type === "goals" && result.newId) idMaps.goals.set(record.id, result.newId);
@@ -1070,11 +1195,12 @@ export async function runTenantMigration({
         }
 
         progress.objects[type].status =
-          progress.objects[type].errors.length > 0 ? "partial" : "running";
+          progress.objects[type].errors.some((entry) => entry.severity !== "warning") ? "partial" : "running";
         onClientProgress(clientIndex, cloneProgress(progress));
       }
 
-      if (progress.objects[type].errors.length === 0) {
+      const blockingErrors = progress.objects[type].errors.filter((entry) => entry.severity !== "warning");
+      if (blockingErrors.length === 0) {
         progress.objects[type].status = "success";
       } else if (progress.objects[type].succeeded === 0) {
         progress.objects[type].status = "failed";
@@ -1145,7 +1271,10 @@ export async function runTenantMigration({
       },
     };
 
-    const objectFailures = OBJECT_ORDER.reduce((sum, type) => sum + progress.objects[type].errors.length, 0);
+    const objectFailures = OBJECT_ORDER.reduce(
+      (sum, type) => sum + progress.objects[type].errors.filter((entry) => entry.severity !== "warning").length,
+      0
+    );
     const totalRecords = OBJECT_ORDER.reduce((sum, type) => sum + progress.objects[type].total, 0);
 
     clientSummaries.push({
