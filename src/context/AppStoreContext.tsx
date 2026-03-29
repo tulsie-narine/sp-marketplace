@@ -14,11 +14,20 @@ interface AppStoreState {
 
 const AppStoreContext = createContext<AppStoreState | null>(null);
 
+function mergeSeedApps(storedApps: MarketplaceApp[]) {
+  const existingIds = new Set(storedApps.map((app) => app.id));
+  const missingSeedApps = SEED_APPS.filter((app) => !existingIds.has(app.id));
+  return [...storedApps, ...missingSeedApps];
+}
+
 export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   const [apps, setApps] = useState<MarketplaceApp[]>(() => {
     try {
       const stored = localStorage.getItem("sp_apps");
-      return stored ? JSON.parse(stored) : SEED_APPS;
+      if (!stored) return SEED_APPS;
+
+      const parsed = JSON.parse(stored) as MarketplaceApp[];
+      return mergeSeedApps(parsed);
     } catch {
       return SEED_APPS;
     }
