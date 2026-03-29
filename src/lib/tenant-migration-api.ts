@@ -762,11 +762,24 @@ async function collectClientRelationshipsFromSource(
   const relationships: PendingRelationship[] = [];
   const goals = sourceRecords.goals || [];
   const initiatives = sourceRecords.initiatives || [];
+  const actionItems = sourceRecords.actionItems || [];
 
   const goalNames = buildRecordNameLookup(goals);
   const initiativeNames = buildRecordNameLookup(initiatives);
-  const actionItemNames = buildRecordNameLookup(sourceRecords.actionItems || []);
+  const actionItemNames = buildRecordNameLookup(actionItems);
   const meetingNames = buildRecordNameLookup(sourceRecords.meetings || []);
+  const seen = new Set<string>();
+
+  const pushRelationship = (relationship: PendingRelationship) => {
+    const key = [
+      relationship.type,
+      relationship.sourceSourceId,
+      relationship.targetSourceId,
+    ].join("|");
+    if (seen.has(key)) return;
+    seen.add(key);
+    relationships.push(relationship);
+  };
 
   for (const goal of goals) {
     const goalId = asText(goal.id);
@@ -779,7 +792,7 @@ async function collectClientRelationshipsFromSource(
       "initiative_ids"
     );
     for (const initiativeId of initiativeIds) {
-      relationships.push({
+      pushRelationship({
         clientName: "",
         type: "Goal ↔ Initiative",
         sourceRecord: goalName,
@@ -796,7 +809,7 @@ async function collectClientRelationshipsFromSource(
       "meeting_ids"
     );
     for (const meetingId of meetingIds) {
-      relationships.push({
+      pushRelationship({
         clientName: "",
         type: "Goal ↔ Meeting",
         sourceRecord: goalName,
@@ -819,12 +832,45 @@ async function collectClientRelationshipsFromSource(
       "action_item_ids"
     );
     for (const actionItemId of actionItemIds) {
-      relationships.push({
+      pushRelationship({
         clientName: "",
         type: "Initiative ↔ Action Item",
         sourceRecord: initiativeName,
         targetRecord:
           actionItemNames.get(actionItemId) || "Action Item",
+        sourceSourceId: initiativeId,
+        targetSourceId: actionItemId,
+      });
+    }
+  }
+
+  for (const actionItem of actionItems) {
+    const actionItemId =
+      asText(actionItem.engagement_action_id) || asText(actionItem.id) || null;
+    if (!actionItemId) continue;
+
+    const actionItemName =
+      actionItemNames.get(asText(actionItem.id) || actionItemId) ||
+      getRecordName(actionItem, "Action Item");
+
+    const initiativeLinks = Array.isArray(actionItem.initiative_links)
+      ? actionItem.initiative_links
+      : actionItem.initiative_links
+      ? [actionItem.initiative_links]
+      : [];
+
+    for (const initiativeLink of initiativeLinks) {
+      const initiativeId =
+        asText(initiativeLink?.initiative_id) ||
+        asText(initiativeLink?.id) ||
+        null;
+      if (!initiativeId) continue;
+      pushRelationship({
+        clientName: "",
+        type: "Initiative ↔ Action Item",
+        sourceRecord:
+          initiativeNames.get(initiativeId) || "Initiative",
+        targetRecord: actionItemName,
         sourceSourceId: initiativeId,
         targetSourceId: actionItemId,
       });
