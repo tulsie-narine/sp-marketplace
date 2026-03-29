@@ -13,7 +13,7 @@ export interface MigrationClient {
 }
 
 export interface DestinationUser {
-  id: string;
+  id: string | number;
   first_name?: string;
   last_name?: string;
   middle_name?: string;
@@ -354,7 +354,10 @@ export async function fetchAllDestinationUsers(apiKey: string): Promise<Destinat
       isRecord(member) &&
       (typeof member.id === "string" || typeof member.id === "number") &&
       member.active !== false
-  );
+  ).map((member) => ({
+    ...member,
+    id: String(member.id),
+  }));
 }
 
 function omitFields(record: Record<string, unknown>, fields: string[]) {
@@ -413,7 +416,7 @@ export function getDestinationUserLabel(user: DestinationUser) {
 
   const email = user.email || user.primary_email;
   if (fullName && email) return `${fullName} (${email})`;
-  return fullName || email || user.id;
+  return String(fullName || email || user.id || "Unknown user");
 }
 
 function resolveClientRouteKey(client: MigrationClient | Record<string, any>) {
