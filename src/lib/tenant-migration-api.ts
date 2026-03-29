@@ -726,19 +726,62 @@ function getShortClientIdCandidate(
   return [...discovered][0] || null;
 }
 
+function buildMemberEmailFilterValue(email: string) {
+  const normalizedEmail = email.trim().toLowerCase();
+  return /[\s,"]/.test(normalizedEmail)
+    ? `eq:"${normalizedEmail.replace(/"/g, '\\"')}"`
+    : `eq:${normalizedEmail}`;
+}
+
+async function fetchDestinationMembersPage(
+  apiKey: string,
+  cursor: string | null,
+  includePageSize: boolean
+) {
+  const params = new URLSearchParams();
+  if (includePageSize) params.set("page_size", "200");
+  if (cursor) params.set("cursor", cursor);
+
+  const endpoint = params.size
+    ? `/core/v1/members?${params.toString()}`
+    : "/core/v1/members";
+
+  return proxyCallWithRetry<{
+    data?: Record<string, unknown>[];
+    next_cursor?: string | null;
+  }>(apiKey, endpoint, "POST");
+}
+
 async function fetchDestinationMembers(
   apiKey: string
 ): Promise<DestinationMember[]> {
   const results: DestinationMember[] = [];
   let cursor: string | null = null;
+  let includePageSize = true;
 
   do {
-    const params = new URLSearchParams({ page_size: "200" });
-    if (cursor) params.set("cursor", cursor);
-    const response = await proxyCallWithRetry<{
+    let response: {
       data?: Record<string, unknown>[];
       next_cursor?: string | null;
-    }>(apiKey, `/core/v1/members?${params.toString()}`, "POST");
+    };
+    try {
+      response = await fetchDestinationMembersPage(
+        apiKey,
+        cursor,
+        includePageSize
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "";
+      if (
+        includePageSize &&
+        /Unexpected property 'page_size'|Only 'filter' is supported/i.test(detail)
+      ) {
+        includePageSize = false;
+        response = await fetchDestinationMembersPage(apiKey, cursor, false);
+      } else {
+        throw error;
+      }
+    }
 
     for (const member of response.data || []) {
       const id = asText(member.id);
@@ -761,26 +804,33 @@ async function findDestinationMemberIdByEmailViaApi(
   const normalizedEmail = email?.trim().toLowerCase();
   if (!normalizedEmail) return null;
 
-  const response = await proxyCallWithRetry<{
-    data?: Record<string, unknown>[];
-  }>(
-    apiKey,
-    "/core/v1/members",
-    "POST",
-    {
+  try {
+    const response = await proxyCallWithRetry<{
+      data?: Record<string, unknown>[];
+    }>(apiKey, "/core/v1/members", "POST", {
       filter: {
-        "contact_info.email": `eq:\"${normalizedEmail}\"`,
+        "contact_info.email": buildMemberEmailFilterValue(normalizedEmail),
       },
+    });
+
+    const match = (response.data || []).find((member) => {
+      const memberEmail =
+        asText(member.contact_info?.email) || asText(member.email);
+      return memberEmail?.trim().toLowerCase() === normalizedEmail;
+    });
+
+    if (match) {
+      return asText(match.id);
     }
-  );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "";
+    if (!detail.startsWith("400")) {
+      throw error;
+    }
+  }
 
-  const match = (response.data || []).find((member) => {
-    const memberEmail =
-      asText(member.contact_info?.email) || asText(member.email);
-    return memberEmail?.trim().toLowerCase() === normalizedEmail;
-  });
-
-  return asText(match?.id);
+  const members = await fetchDestinationMembers(apiKey);
+  return findDestinationMemberIdByEmail(members, normalizedEmail);
 }
 
 function findDestinationMemberIdByEmail(
