@@ -14,6 +14,12 @@ export interface MigrationClient {
 
 export interface DestinationUser {
   id: string | number;
+  name?: {
+    first?: string;
+    last?: string;
+    middle?: string;
+    full?: string;
+  };
   first_name?: string;
   last_name?: string;
   middle_name?: string;
@@ -25,6 +31,11 @@ export interface DestinationUser {
   full_name?: string;
   email?: string;
   primary_email?: string;
+  contact_info?: {
+    email?: string;
+    ext?: string;
+    phone?: string;
+  };
   active?: boolean;
 }
 
@@ -430,20 +441,23 @@ function getRecordName(record: Record<string, any>, fallback: string) {
 
 export function getDestinationUserLabel(user: DestinationUser) {
   const fullName =
-    asText(user.full) ||
-    asText(user.name) ||
-    asText(user.full_name) ||
+    asText(user.name?.full) ||
     [
-      asText(user.first_name) || asText(user.first),
-      asText(user.middle_name) || asText(user.middle),
-      asText(user.last_name) || asText(user.last),
+      asText(user.name?.first) || asText(user.first_name) || asText(user.first),
+      asText(user.name?.last) || asText(user.last_name) || asText(user.last),
     ]
       .filter(Boolean)
       .join(" ")
-      .trim();
+      .trim() ||
+    asText(user.full) ||
+    asText(user.full_name);
 
-  const email = asText(user.email) || asText(user.primary_email);
-  if (fullName && email) return `${fullName} (${email})`;
+  const email =
+    asText(user.contact_info?.email) ||
+    asText(user.email) ||
+    asText(user.primary_email);
+
+  if (fullName && email) return `${fullName} [${email}]`;
   return String(fullName || email || asText(user.id) || "Unknown user");
 }
 
