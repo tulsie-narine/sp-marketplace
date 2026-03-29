@@ -395,10 +395,61 @@ function resolveClientRouteKey(client: MigrationClient | Record<string, any>) {
   );
 }
 
+function extractFirstAssignedMemberId(record: Record<string, any>): string | null {
+  const fromAssignedUserId = asText(record.assigned_user_id);
+  if (fromAssignedUserId) return fromAssignedUserId;
+
+  const sources = [
+    record.assigned_user_ids,
+    record.assigned_users,
+    record.assignees,
+  ];
+
+  for (const source of sources) {
+    if (!Array.isArray(source)) continue;
+    for (const item of source) {
+      const id =
+        (isRecord(item) && (asText(item.id) || asText(item.member_id) || asText(item.user_id))) ||
+        asText(item);
+      if (id) return id;
+    }
+  }
+
+  return null;
+}
+
+function extractMemberEmail(member: Record<string, any>): string | null {
+  return (
+    asText(member.contact_info?.email) ||
+    asText(member.email) ||
+    asText(member.primary_email) ||
+    null
+  );
+}
+
+function isAssigneeResolutionError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("assigned_user_ids") ||
+    message.includes("assigned user") ||
+    message.includes("email") ||
+    message.startsWith("404:")
+  );
+}
+
+async function fetchSourceMemberEmail(
+  apiKey: string,
+  memberId: string
+): Promise<string | null> {
+  const member = await proxyCallWithRetry<Record<string, any>>(apiKey, `/core/v1/members/${memberId}`);
+  return isRecord(member) ? extractMemberEmail(member) : null;
+}
+
 function buildActionItemBody(
   destinationClientId: string,
   record: Record<string, any>,
-  actionItemAssigneeEmail?: string | null
+  assigneeEmail?: string | null
 ) {
   const body = clientWriteBody(destinationClientId, record, [
     "completion_status",
@@ -408,10 +459,10 @@ function buildActionItemBody(
     "assigned_user_emails",
   ]);
 
-  if (actionItemAssigneeEmail) {
+  if (assigneeEmail) {
     return {
       ...body,
-      assigned_user_ids: [{ email: actionItemAssigneeEmail }],
+      assigned_user_ids: [{ email: assigneeEmail }],
     };
   }
 
@@ -580,6 +631,7 @@ function getIdMaps() {
 
 async function migrateRecord(
   type: Exclude<MigrationObjectType, "relationships">,
+  sourceApiKey: string,
   destinationApiKey: string,
   destinationClient: MigrationClient,
   record: Record<string, any>,
@@ -663,13 +715,56 @@ async function migrateRecord(
   }
 
   if (type === "actionItems") {
-    const body = buildActionItemBody(destinationClientId, record, actionItemAssigneeEmail);
-    const created = await proxyCallWithRetry<{ id: string }>(
-      destinationApiKey,
-      "/lifecycle-manager/v1/action-items",
-      "POST",
-      body
-    );
+    const sourceMemberId = extractFirstAssignedMemberId(record);
+    let sourceAssigneeEmail: string | null = null;
+
+    if (sourceMemberId) {
+      try {
+        sourceAssigneeEmail = await fetchSourceMemberEmail(sourceApiKey, sourceMemberId);
+      } catch (error) {
+        if (!actionItemAssigneeEmail) {
+          throw new Error("Could not resolve assignee - no default set");
+        }
+      }
+    }
+
+    const assigneeEmail = sourceAssigneeEmail || actionItemAssigneeEmail || null;
+    if (!assigneeEmail) {
+      throw new Error("Could not resolve assignee - no default set");
+    }
+
+    let body = buildActionItemBody(destinationClientId, record, assigneeEmail);
+    let created: { id: string };
+
+    try {
+      created = await proxyCallWithRetry<{ id: string }>(
+        destinationApiKey,
+        "/lifecycle-manager/v1/action-items",
+        "POST",
+        body
+      );
+    } catch (error) {
+      const canRetryWithDefault =
+        Boolean(actionItemAssigneeEmail) &&
+        actionItemAssigneeEmail !== assigneeEmail &&
+        isAssigneeResolutionError(error);
+
+      if (!canRetryWithDefault) {
+        if (isAssigneeResolutionError(error) && !actionItemAssigneeEmail) {
+          throw new Error("Could not resolve assignee - no default set");
+        }
+        throw error;
+      }
+
+      body = buildActionItemBody(destinationClientId, record, actionItemAssigneeEmail);
+      created = await proxyCallWithRetry<{ id: string }>(
+        destinationApiKey,
+        "/lifecycle-manager/v1/action-items",
+        "POST",
+        body
+      );
+    }
+
     await sleep(DEFAULT_DELAY_MS);
     await proxyCallWithRetry(destinationApiKey, `/lifecycle-manager/v1/action-items/${created.id}`, "PUT", body);
     if (record.completion_status) {
@@ -950,6 +1045,7 @@ export async function runTenantMigration({
         try {
           const result = await migrateRecord(
             type,
+            sourceApiKey,
             destinationApiKey,
             destinationClient,
             record,

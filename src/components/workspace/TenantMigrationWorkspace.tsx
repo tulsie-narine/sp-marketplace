@@ -363,15 +363,6 @@ export function TenantMigrationWorkspace() {
       return;
     }
 
-    if (selectedObjects.actionItems && !actionItemAssigneeEmail.trim()) {
-      toast({
-        title: "Enter an Action Item assignee email",
-        description: "Provide the default destination email address that should own migrated action items before starting the migration.",
-        variant: "destructive",
-      });
-      return;
-    }
-
     const selectedMappings = mappedClients;
     const initialProgress = selectedMappings.map((mapping) => buildInitialClientProgress(mapping));
     setMigrationProgress(initialProgress);
@@ -388,7 +379,7 @@ export function TenantMigrationWorkspace() {
         selectedObjects,
         sourceClients,
         destinationClients,
-        actionItemAssigneeEmail: selectedObjects.actionItems ? actionItemAssigneeEmail.trim() : null,
+        actionItemAssigneeEmail: selectedObjects.actionItems ? actionItemAssigneeEmail.trim() || null : null,
         onClientProgress: (clientIndex, progress) => {
           setMigrationProgress((prev) => prev.map((item, index) => (index === clientIndex ? progress : item)));
         },
@@ -740,7 +731,7 @@ export function TenantMigrationWorkspace() {
       {selectedObjects.actionItems && (
         <div className="mt-5 rounded-md border border-border bg-surface-raised p-4">
           <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Default Action Item Assignee Email
+            Default Assignee Email for Action Items
           </label>
           <input
             type="email"
@@ -750,7 +741,7 @@ export function TenantMigrationWorkspace() {
             className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           />
           <p className="mt-2 text-xs text-muted-foreground">
-            Source assignee IDs cannot be reused across tenants, so migrated action items will be reassigned to this default destination email.
+            Used when the original assignee cannot be resolved in the destination tenant. Recommended: your MSP's primary ScalePad user email.
           </p>
         </div>
       )}
