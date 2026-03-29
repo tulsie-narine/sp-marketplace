@@ -350,13 +350,45 @@ function buildContractCreatePayload(record: Record<string, any>) {
   };
 }
 
+function collectShortIdCandidates(value: unknown, results: Set<string>) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length >= 5 && trimmed.length <= 16 && !trimmed.includes("-")) {
+      results.add(trimmed);
+    }
+    return;
+  }
+
+  if (typeof value === "number") {
+    const text = String(value);
+    if (text.length >= 5 && text.length <= 16) {
+      results.add(text);
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectShortIdCandidates(item, results);
+    return;
+  }
+
+  if (isRecord(value)) {
+    for (const nested of Object.values(value)) {
+      collectShortIdCandidates(nested, results);
+    }
+  }
+}
+
 function getShortClientIdCandidate(client: MigrationClient | Record<string, unknown>): string | null {
   const candidates = [client.client_id, client.client_number, client.key, client.reference, client.label, client.short_id, client.code];
   for (const candidate of candidates) {
     const value = asText(candidate);
-    if (value && value.length >= 5 && value.length <= 16) return value;
+    if (value && value.length >= 5 && value.length <= 16 && !value.includes("-")) return value;
   }
-  return null;
+
+  const discovered = new Set<string>();
+  collectShortIdCandidates(client, discovered);
+  return [...discovered][0] || null;
 }
 
 async function resolveDeliverableClientId(apiKey: string, client: MigrationClient, cache: Map<string, string>): Promise<string> {
@@ -372,7 +404,7 @@ async function resolveDeliverableClientId(apiKey: string, client: MigrationClien
   const detailedClient = Array.isArray(response.data) ? response.data[0] : isRecord(response.data) ? response.data : null;
   const resolved = detailedClient ? getShortClientIdCandidate(detailedClient) : null;
   if (!resolved) {
-    throw new Error("Deliverables skipped — short client ID could not be resolved. The deliverables API requires a short client ID (<=16 chars), not a UUID. Check ScalePad support for the correct ID format.");
+    throw new Error("Deliverables skipped ï¿½ short client ID could not be resolved. The deliverables API requires a short client ID (<=16 chars), not a UUID. Check ScalePad support for the correct ID format.");
   }
   cache.set(client.id, resolved);
   return resolved;
@@ -481,7 +513,7 @@ async function migrateRecord(
 
   if (type === "actionItems") {
     const assigneeEmail = extractActionItemAssigneeEmail(record) || actionItemAssigneeEmail || null;
-    if (!assigneeEmail) throw new Error("Skipped — no assignee available. Set a default assignee email on the Object Selection screen.");
+    if (!assigneeEmail) throw new Error("Skipped ï¿½ no assignee available. Set a default assignee email on the Object Selection screen.");
     const body = { client_key: { id: destinationClientId }, description: asText(record.description) || "Migrated action item", assigned_user_ids: [{ email: assigneeEmail }], due_at: normalizeDueAt(record.due_at) };
     const created = await proxyCallWithRetry<{ id: string }>(destinationApiKey, "/lifecycle-manager/v1/action-items", "POST", body);
     if (record.completion_status) {
@@ -494,8 +526,8 @@ async function migrateRecord(
   if (type === "contracts") {
     const billingStartAt = asText(record.billing_start_at) || new Date().toISOString();
     const contractTitle = asText(record.title) || asText(record.name) || "Migrated Contract";
-    if (!asText(record.billing_start_at)) warnings.push(buildWarning(destinationClient.name, OBJECT_LABELS.contracts, recordName, "billing_start_at was missing on source — defaulted to today"));
-    if (!asText(record.title) && !asText(record.name)) warnings.push(buildWarning(destinationClient.name, OBJECT_LABELS.contracts, recordName, "Contract title was missing on source — used 'Migrated Contract'"));
+    if (!asText(record.billing_start_at)) warnings.push(buildWarning(destinationClient.name, OBJECT_LABELS.contracts, recordName, "billing_start_at was missing on source ï¿½ defaulted to today"));
+    if (!asText(record.title) && !asText(record.name)) warnings.push(buildWarning(destinationClient.name, OBJECT_LABELS.contracts, recordName, "Contract title was missing on source ï¿½ used 'Migrated Contract'"));
     const body = { client_key: { id: destinationClientId }, create_payload: { ...buildContractCreatePayload(record), title: contractTitle, billing_start_at: billingStartAt } };
     const created = await proxyCallWithRetry<{ id: string }>(destinationApiKey, "/lifecycle-manager/v1/contracts", "POST", body);
     return { newId: created.id, recordName, relationships: [], warnings };
@@ -508,14 +540,14 @@ async function migrateRecord(
       await sleep(DEFAULT_DELAY_MS);
       await proxyCallWithRetry(destinationApiKey, `/lifecycle-manager/v1/assessments/${created.id}/completion-status`, "PUT", { status: "Completed" });
     }
-    warnings.push(buildWarning(destinationClient.name, OBJECT_LABELS.assessments, recordName, "Assessment created. Answers not replayed — requires manual re-evaluation in destination tenant."));
+    warnings.push(buildWarning(destinationClient.name, OBJECT_LABELS.assessments, recordName, "Assessment created. Answers not replayed ï¿½ requires manual re-evaluation in destination tenant."));
     return { newId: created.id, recordName, relationships: [], warnings };
   }
 
   if (type === "meetings") {
     const body = { client_key: { id: destinationClientId }, title: asText(record.title) || asText(record.name) || asText(record.subject) || asText(record.topic) || "Untitled Meeting", type: null, starts_at: isIsoDateTime(record.starts_at) ? record.starts_at : null, ends_at: isIsoDateTime(record.ends_at) ? record.ends_at : null, agenda_json: record.agenda_json ?? null };
     const created = await proxyCallWithRetry<{ id: string }>(destinationApiKey, "/lifecycle-manager/v2/meetings", "POST", body);
-    warnings.push(buildWarning(destinationClient.name, OBJECT_LABELS.meetings, recordName, "Meeting created. Type and full details not updated — meeting type IDs are tenant-specific and cannot be migrated."));
+    warnings.push(buildWarning(destinationClient.name, OBJECT_LABELS.meetings, recordName, "Meeting created. Type and full details not updated ï¿½ meeting type IDs are tenant-specific and cannot be migrated."));
     if (record.completion_status) {
       await sleep(DEFAULT_DELAY_MS);
       await proxyCallWithRetry(destinationApiKey, `/lifecycle-manager/v1/meetings/${created.id}/completion-status`, "PUT", { completion_status: record.completion_status });
