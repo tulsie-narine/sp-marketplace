@@ -6,6 +6,7 @@ import { MiniAppWorkspace } from "@/components/workspace/MiniAppWorkspace";
 import { OpportunitiesWorkspace } from "@/components/workspace/OpportunitiesWorkspace";
 import { InitiativeManagerWorkspace } from "@/components/workspace/InitiativeManagerWorkspace";
 import { GoalManagerWorkspace } from "@/components/workspace/GoalManagerWorkspace";
+import { TenantMigrationWorkspace } from "@/components/workspace/TenantMigrationWorkspace";
 import { AppRatingsComments } from "@/components/marketplace/AppRatingsComments";
 
 import { ArrowLeft } from "lucide-react";
@@ -85,6 +86,8 @@ export default function AppDetail() {
           <InitiativeManagerWorkspace />
         ) : (app.input_schema as any)?.appType === "goal-manager" ? (
           <GoalManagerWorkspace />
+        ) : (app.input_schema as any)?.appType === "tenant-migration" ? (
+          <TenantMigrationWorkspace />
         ) : (app.input_schema as any)?.realApi ? (
           <OpportunitiesWorkspace app={app} />
         ) : (
