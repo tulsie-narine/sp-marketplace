@@ -12,13 +12,6 @@ export interface MigrationClient {
   label?: string;
 }
 
-function firstArray<T>(...values: unknown[]): T[] {
-  for (const value of values) {
-    if (Array.isArray(value)) return value as T[];
-  }
-  return [];
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object";
 }
@@ -137,6 +130,11 @@ export interface RunMigrationParams {
   destinationClients: MigrationClient[];
   actionItemAssigneeEmail?: string | null;
   onClientProgress: (clientIndex: number, progress: ClientMigrationProgress) => void;
+}
+
+interface DestinationMember {
+  id: string;
+  email: string;
 }
 
 const OBJECT_ORDER: Exclude<MigrationObjectType, "relationships">[] = [
@@ -403,39 +401,6 @@ function getRecordName(record: Record<string, any>, fallback: string) {
   );
 }
 
-function resolveClientRouteKey(client: MigrationClient | Record<string, any>) {
-  return (
-    client.client_id ||
-    client.client_number ||
-    client.key ||
-    client.reference ||
-    client.id
-  );
-}
-
-function extractFirstAssignedMemberId(record: Record<string, any>): string | null {
-  const fromAssignedUserId = asText(record.assigned_user_id);
-  if (fromAssignedUserId) return fromAssignedUserId;
-
-  const sources = [
-    record.assigned_user_ids,
-    record.assigned_users,
-    record.assignees,
-  ];
-
-  for (const source of sources) {
-    if (!Array.isArray(source)) continue;
-    for (const item of source) {
-      const id =
-        (isRecord(item) && (asText(item.id) || asText(item.member_id) || asText(item.user_id))) ||
-        asText(item);
-      if (id) return id;
-    }
-  }
-
-  return null;
-}
-
 function extractMemberEmail(member: Record<string, any>): string | null {
   return (
     asText(member.contact_info?.email) ||
@@ -462,11 +427,13 @@ function extractFirstEmail(items: unknown): string | null {
 
 function extractActionItemAssigneeEmail(record: Record<string, any>): string | null {
   return (
+    asText(record.assigned_user?.email) ||
+    asText(record.assigned_user_email) ||
+    asText(record.assignee?.email) ||
+    asText(record.assignee_email) ||
     extractFirstEmail(record.assigned_user_ids) ||
     extractFirstEmail(record.assigned_users) ||
     extractFirstEmail(record.assignees) ||
-    asText(record.assigned_user_email) ||
-    asText(record.assignee_email) ||
     null
   );
 }
@@ -480,6 +447,13 @@ function extractAssessmentEvaluatorEmail(record: Record<string, any>): string | 
     asText(record.evaluate_user_email) ||
     null
   );
+}
+
+function hasReplayAnswers(record: Record<string, any>): boolean {
+  if (Array.isArray(record.answered_items)) return record.answered_items.length > 0;
+  if (Array.isArray(record.answers)) return record.answers.length > 0;
+  if (isRecord(record.answers)) return Object.keys(record.answers).length > 0;
+  return Boolean(record.answered_items || record.answers);
 }
 
 function isAssigneeResolutionError(error: unknown): boolean {
@@ -502,22 +476,28 @@ function normalizeDueAt(value: unknown): string | null {
   return isIsoDateTime(value) ? value : null;
 }
 
-function resolveShortClientId(client: MigrationClient | Record<string, any>): string | null {
-  const candidates = [
-    asText(client.client_id),
-    asText(client.client_number),
-    asText(client.key),
-    asText(client.reference),
-    asText(client.label),
-  ];
+function findDestinationMemberIdByEmail(
+  members: DestinationMember[],
+  email: string | null | undefined
+): string | null {
+  const normalizedEmail = email?.trim().toLowerCase();
+  if (!normalizedEmail) return null;
+  return members.find((member) => member.email.toLowerCase() === normalizedEmail)?.id || null;
+}
 
-  for (const candidate of candidates) {
-    if (candidate && candidate.length <= 16) {
-      return candidate;
-    }
-  }
-
-  return null;
+async function fetchDestinationMembers(apiKey: string): Promise<DestinationMember[]> {
+  const items = await fetchAllPages<Record<string, any>>(apiKey, (cursor) => {
+    const params = new URLSearchParams({ page_size: "200" });
+    if (cursor) params.set("cursor", cursor);
+    return `/core/v1/members?${params.toString()}`;
+  });
+  return items
+    .map((member) => {
+      const id = asText(member.id);
+      const email = extractMemberEmail(member);
+      return id && email ? { id, email } : null;
+    })
+    .filter((member): member is DestinationMember => Boolean(member));
 }
 
 function buildActionItemBody(
@@ -662,14 +642,12 @@ async function fetchObjectRecords(
   client: MigrationClient
 ): Promise<Record<string, any>[]> {
   if (type === "deliverables") {
-    const clientRouteKey = resolveShortClientId(client);
-    if (!clientRouteKey) {
-      throw new Error("Deliverables skipped — could not resolve short client ID from source client record");
-    }
     const deliverables = await fetchAllPages<Record<string, any>>(apiKey, (cursor) => {
       const params = new URLSearchParams({ page_size: "100" });
       if (cursor) params.set("cursor", cursor);
-      return `/lifecycle-manager/v1/clients/${clientRouteKey}/deliverables?${params.toString()}`;
+      const endpoint = `/lifecycle-manager/v1/clients/${client.id}/deliverables?${params.toString()}`;
+      console.debug("Tenant Migration deliverables read URL:", endpoint);
+      return endpoint;
     });
 
     const detailed: Record<string, any>[] = [];
@@ -724,7 +702,8 @@ async function migrateRecord(
   destinationApiKey: string,
   destinationClient: MigrationClient,
   record: Record<string, any>,
-  actionItemAssigneeEmail?: string | null
+  actionItemAssigneeEmail?: string | null,
+  destinationMembers: DestinationMember[] = []
 ): Promise<{ newId?: string; recordName: string; relationships: PendingRelationship[]; warnings: MigrationErrorEntry[] }> {
   const destinationClientId = destinationClient.id;
   const recordName = getRecordName(record, `Unnamed ${OBJECT_LABELS[type]}`);
@@ -810,10 +789,27 @@ async function migrateRecord(
     const sourceAssigneeEmail = extractActionItemAssigneeEmail(record);
     const assigneeEmail = sourceAssigneeEmail || actionItemAssigneeEmail || null;
     if (!assigneeEmail) {
-      throw new Error("Skipped — no assignee email available and no default set");
+      throw new Error("Skipped — no assignee available. Set a default assignee email on the Object Selection screen.");
     }
 
-    let body = buildActionItemBody(destinationClientId, record, assigneeEmail);
+    const buildValidBody = (email: string | null) => {
+      const candidateBody = buildActionItemBody(destinationClientId, record, email);
+      const assignedUserIds = Array.isArray(candidateBody.assigned_user_ids) ? candidateBody.assigned_user_ids : [];
+      const firstAssignedUser = isRecord(assignedUserIds[0]) ? assignedUserIds[0] : null;
+      if (
+        assignedUserIds.length === 0 ||
+        !firstAssignedUser ||
+        (!asText(firstAssignedUser.email) && !asText(firstAssignedUser.id))
+      ) {
+        return null;
+      }
+      return candidateBody;
+    };
+
+    let body = buildValidBody(assigneeEmail);
+    if (!body) {
+      throw new Error("Skipped — no assignee available. Set a default assignee email on the Object Selection screen.");
+    }
     let created: { id: string };
     try {
       created = await proxyCallWithRetry<{ id: string }>(
@@ -823,17 +819,19 @@ async function migrateRecord(
         body
       );
     } catch (error) {
-      const canRetryWithDefault =
+      const fallbackBody =
         Boolean(sourceAssigneeEmail) &&
         Boolean(actionItemAssigneeEmail) &&
         sourceAssigneeEmail !== actionItemAssigneeEmail &&
-        isAssigneeResolutionError(error);
+        isAssigneeResolutionError(error)
+          ? buildValidBody(actionItemAssigneeEmail)
+          : null;
 
-      if (!canRetryWithDefault) {
+      if (!fallbackBody) {
         throw error;
       }
 
-      body = buildActionItemBody(destinationClientId, record, actionItemAssigneeEmail);
+      body = fallbackBody;
       created = await proxyCallWithRetry<{ id: string }>(
         destinationApiKey,
         "/lifecycle-manager/v1/action-items",
@@ -863,6 +861,7 @@ async function migrateRecord(
 
   if (type === "contracts") {
     const billingStartAt = asText(record.billing_start_at) || new Date().toISOString();
+    const contractTitle = asText(record.title) || asText(record.name) || "Migrated Contract";
     if (!asText(record.billing_start_at)) {
       warnings.push(
         buildWarning(
@@ -873,11 +872,24 @@ async function migrateRecord(
         )
       );
     }
+    if (!asText(record.title) && !asText(record.name)) {
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.contracts,
+          recordName,
+          "Contract title was missing on source — used 'Migrated Contract'"
+        )
+      );
+    }
     const body = {
       client_key: { id: destinationClientId },
+      title: contractTitle,
       billing_start_at: billingStartAt,
       create_payload: {
         ...buildContractCreatePayload(record),
+        title: contractTitle,
+        name: contractTitle,
         billing_start_at: billingStartAt,
       },
     };
@@ -913,8 +925,9 @@ async function migrateRecord(
       );
     }
     const answers = record.answered_items || record.answers;
-    if (answers) {
-      const evaluatorUserId = extractAssessmentEvaluatorEmail(record) || actionItemAssigneeEmail || null;
+    if (hasReplayAnswers(record)) {
+      const evaluatorEmail = extractAssessmentEvaluatorEmail(record) || actionItemAssigneeEmail || null;
+      const evaluatorUserId = findDestinationMemberIdByEmail(destinationMembers, evaluatorEmail);
       if (evaluatorUserId) {
         await sleep(DEFAULT_DELAY_MS);
         await proxyCallWithRetry(
@@ -929,7 +942,7 @@ async function migrateRecord(
             destinationClient.name,
             OBJECT_LABELS.assessments,
             recordName,
-            "Assessment created but answers not replayed — no evaluator user ID could be resolved"
+            "Assessment created without answers — evaluator user ID could not be resolved in destination tenant. Ensure the evaluator exists as a member in the destination."
           )
         );
       }
@@ -938,37 +951,22 @@ async function migrateRecord(
   }
 
   if (type === "meetings") {
-    const body = clientWriteBody(destinationClientId, record, [
-      "completion_status",
-      "attendees",
-      "attendee_users",
-      "attendee_contacts",
-      "title",
-    ]);
-    const sourceType = asText(record.type);
-    const titledBody = {
-      ...body,
-      title: record.title || record.name || record.subject || record.topic || "Migrated Meeting",
-      type: sourceType || "General",
+    const meetingBody = {
+      client_key: { id: destinationClientId },
+      title: record.title || record.name || record.subject || record.topic || "Untitled Meeting",
+      type: asText(record.type) || null,
+      starts_at: isIsoDateTime(record.starts_at) ? record.starts_at : null,
+      ends_at: isIsoDateTime(record.ends_at) ? record.ends_at : null,
+      agenda_json: record.agenda_json ?? null,
     };
-    if (!sourceType) {
-      warnings.push(
-        buildWarning(
-          destinationClient.name,
-          OBJECT_LABELS.meetings,
-          recordName,
-          "Meeting type was missing on source — defaulted to 'General'"
-        )
-      );
-    }
     const created = await proxyCallWithRetry<{ id: string }>(
       destinationApiKey,
-      "/lifecycle-manager/v1/meetings",
+      "/lifecycle-manager/v2/meetings",
       "POST",
-      titledBody
+      meetingBody
     );
     await sleep(DEFAULT_DELAY_MS);
-    await proxyCallWithRetry(destinationApiKey, `/lifecycle-manager/v1/meetings/${created.id}`, "PUT", titledBody);
+    await proxyCallWithRetry(destinationApiKey, `/lifecycle-manager/v2/meetings/${created.id}`, "PUT", meetingBody);
     if (record.completion_status) {
       await sleep(DEFAULT_DELAY_MS);
       await proxyCallWithRetry(
@@ -1008,14 +1006,12 @@ async function migrateRecord(
     };
   }
 
-  const destinationClientRouteKey = resolveShortClientId(destinationClient);
-  if (!destinationClientRouteKey) {
-    throw new Error("Deliverables skipped — could not resolve short client ID from source client record");
-  }
   const body = omitFields(record, ["id", "client", "client_id", "client_key", "record_created_at", "record_updated_at"]);
+  const createEndpoint = `/lifecycle-manager/v1/clients/${destinationClient.id}/deliverables`;
+  console.debug("Tenant Migration deliverables write URL:", createEndpoint);
   const created = await proxyCallWithRetry<{ id: string }>(
     destinationApiKey,
-    `/lifecycle-manager/v1/clients/${destinationClientRouteKey}/deliverables`,
+    createEndpoint,
     "POST",
     body
   );
@@ -1109,8 +1105,17 @@ export async function runTenantMigration({
   const relationshipLog: RelationshipLogEntry[] = [];
   let totalCreated = 0;
   let totalFailures = 0;
+  let destinationMembers: DestinationMember[] = [];
   const sourceClientLookup = new Map(sourceClients.map((client) => [client.id, client]));
   const destinationClientLookup = new Map(destinationClients.map((client) => [client.id, client]));
+
+  if (selectedObjects.assessments) {
+    try {
+      destinationMembers = await fetchDestinationMembers(destinationApiKey);
+    } catch {
+      destinationMembers = [];
+    }
+  }
 
   for (let clientIndex = 0; clientIndex < mappings.length; clientIndex += 1) {
     const mapping = mappings[clientIndex];
@@ -1170,7 +1175,8 @@ export async function runTenantMigration({
             destinationApiKey,
             destinationClient,
             record,
-            actionItemAssigneeEmail
+            actionItemAssigneeEmail,
+            destinationMembers
           );
           progress.objects[type].succeeded += 1;
           totalCreated += 1;
