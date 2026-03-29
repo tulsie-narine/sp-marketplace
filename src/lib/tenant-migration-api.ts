@@ -350,40 +350,43 @@ function buildContractCreatePayload(record: Record<string, any>) {
   };
 }
 
-function collectShortIdCandidates(value: unknown, results: Set<string>) {
+function collectShortIdCandidates(value: unknown, results: Set<string>, keyHint?: string) {
   if (typeof value === "string") {
     const trimmed = value.trim();
-    if (trimmed.length >= 5 && trimmed.length <= 16 && !trimmed.includes("-")) {
+    const looksLikeIdentifier = keyHint ? /(id|number|key|code|reference|ref)$/i.test(keyHint) : false;
+    if (looksLikeIdentifier && trimmed.length >= 5 && trimmed.length <= 16 && !trimmed.includes(" ") && !trimmed.includes("-")) {
       results.add(trimmed);
     }
     return;
   }
 
   if (typeof value === "number") {
-    const text = String(value);
-    if (text.length >= 5 && text.length <= 16) {
-      results.add(text);
+    if (keyHint && /(id|number|key|code|reference|ref)$/i.test(keyHint)) {
+      const text = String(value);
+      if (text.length >= 5 && text.length <= 16) {
+        results.add(text);
+      }
     }
     return;
   }
 
   if (Array.isArray(value)) {
-    for (const item of value) collectShortIdCandidates(item, results);
+    for (const item of value) collectShortIdCandidates(item, results, keyHint);
     return;
   }
 
   if (isRecord(value)) {
-    for (const nested of Object.values(value)) {
-      collectShortIdCandidates(nested, results);
+    for (const [nestedKey, nested] of Object.entries(value)) {
+      collectShortIdCandidates(nested, results, nestedKey);
     }
   }
 }
 
 function getShortClientIdCandidate(client: MigrationClient | Record<string, unknown>): string | null {
-  const candidates = [client.client_id, client.client_number, client.key, client.reference, client.label, client.short_id, client.code];
+  const candidates = [client.client_id, client.client_number, client.key, client.reference, client.short_id, client.code];
   for (const candidate of candidates) {
     const value = asText(candidate);
-    if (value && value.length >= 5 && value.length <= 16 && !value.includes("-")) return value;
+    if (value && value.length >= 5 && value.length <= 16 && !value.includes(" ") && !value.includes("-")) return value;
   }
 
   const discovered = new Set<string>();
@@ -504,7 +507,9 @@ async function migrateRecord(
   }
 
   if (type === "notes") {
-    const body = { client_key: { id: destinationClientId }, title: asText(record.title) || asText(record.subject) || null, content: asText(record.content) || asText(record.body) || asText(record.text) || "", is_private: record.is_private ?? false };
+    const title = asText(record.title) || asText(record.subject) || asText(record.name) || "Migrated Note";
+    const content = asText(record.content) || asText(record.body) || asText(record.text) || asText(record.description) || title;
+    const body = { client_key: { id: destinationClientId }, title, content, is_private: record.is_private ?? false };
     const created = await proxyCallWithRetry<{ id: string }>(destinationApiKey, "/lifecycle-manager/v1/notes", "POST", body);
     await sleep(DEFAULT_DELAY_MS);
     await proxyCallWithRetry(destinationApiKey, `/lifecycle-manager/v1/notes/${created.id}`, "PUT", body);
@@ -534,7 +539,16 @@ async function migrateRecord(
   }
 
   if (type === "assessments") {
-    const body = { client_key: { id: destinationClientId }, assessment_template_id: asText(record.assessment_template_id) || undefined, title: asText(record.title) || null, description: asText(record.description) || null };
+    const body = {
+      client_key: { id: destinationClientId },
+      assessment_template_id: asText(record.assessment_template_id) || undefined,
+      title: asText(record.title) || null,
+      description: asText(record.description) || null,
+      evaluate_at:
+        (isIsoDateTime(record.evaluate_at) && record.evaluate_at) ||
+        (isIsoDateTime(record.record_updated_at) && record.record_updated_at) ||
+        new Date().toISOString(),
+    };
     const created = await proxyCallWithRetry<{ id: string }>(destinationApiKey, "/lifecycle-manager/v1/assessments", "POST", body);
     if (asText(record.status) === "Completed" || asText(record.completion_status)) {
       await sleep(DEFAULT_DELAY_MS);
