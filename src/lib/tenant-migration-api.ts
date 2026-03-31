@@ -1159,6 +1159,63 @@ async function resolveDeliverableClientId(
   );
 }
 
+function buildDeliverableCreatePayload(record: Record<string, any>) {
+  const sourceSections = Array.isArray(record.sections) ? record.sections : [];
+
+  return {
+    name: asText(record.name) || asText(record.title) || "Migrated Deliverable",
+    sections: sourceSections.map((section, sectionIndex) => {
+      const sourceComponents = Array.isArray(section?.components)
+        ? section.components
+        : [];
+
+      return {
+        section_key:
+          asText(section?.section_key) ||
+          asText(section?.name) ||
+          `Section${sectionIndex + 1}`,
+        display_order:
+          typeof section?.display_order === "number"
+            ? section.display_order
+            : sectionIndex + 1,
+        ...(asText(section?.summary_json)
+          ? { summary_json: asText(section.summary_json) }
+          : {}),
+        components: sourceComponents
+          .map((component) => {
+            const componentKey = asText(component?.component_key);
+            const componentTypeConfiguration = isRecord(
+              component?.component_type_configuration
+            )
+              ? component.component_type_configuration
+              : null;
+
+            if (!componentKey || !componentTypeConfiguration) {
+              return null;
+            }
+
+            return {
+              component_key: componentKey,
+              component_type_configuration: componentTypeConfiguration,
+              ...(component?.configuration !== undefined
+                ? { configuration: component.configuration }
+                : {}),
+            };
+          })
+          .filter(
+            (
+              component
+            ): component is {
+              component_key: string;
+              component_type_configuration: Record<string, unknown>;
+              configuration?: unknown;
+            } => Boolean(component)
+          ),
+      };
+    }),
+  };
+}
+
 function collectRelationships(
   type: Exclude<MigrationObjectType, "relationships">,
   record: Record<string, any>
@@ -1252,12 +1309,18 @@ async function fetchObjectRecords(
     const detailed: Record<string, any>[] = [];
     for (const item of deliverables) {
       await sleep(DEFAULT_DELAY_MS);
-      detailed.push(
-        await proxyCallWithRetry<Record<string, any>>(
-          apiKey,
-          `/lifecycle-manager/v1/deliverables/${item.id}`
-        )
+      const detailResponse = await proxyCallWithRetry<Record<string, any>>(
+        apiKey,
+        `/lifecycle-manager/v1/deliverables/${item.id}`
       );
+      const deliverableRecord =
+        isRecord(detailResponse.deliverable) && detailResponse.deliverable
+          ? detailResponse.deliverable
+          : detailResponse;
+      detailed.push({
+        ...item,
+        ...deliverableRecord,
+      });
     }
     return detailed;
   }
@@ -1774,16 +1837,15 @@ async function migrateRecord(
     destinationClient,
     deliverableClientIdCache
   );
-  const createBody = {
-    name:
-      asText(record.name) || asText(record.title) || "Migrated Deliverable",
-    sections: Array.isArray(record.sections) ? record.sections : [],
-  };
-  const patchBody = {
-    name: createBody.name,
-    ...(asText(record.status) ? { status: asText(record.status) } : {}),
-    sections: Array.isArray(record.sections) ? record.sections : [],
-  };
+  const createBody = buildDeliverableCreatePayload(record);
+  if (
+    !Array.isArray(createBody.sections) ||
+    createBody.sections.length === 0
+  ) {
+    throw new Error(
+      "Deliverable skipped - source deliverable did not include any migratable sections."
+    );
+  }
   const createEndpoint = `/lifecycle-manager/v1/clients/${encodeURIComponent(
     deliverableClientId
   )}/deliverables`;
@@ -1801,13 +1863,28 @@ async function migrateRecord(
     throw new Error("Deliverable create did not return a deliverable id.");
   }
 
-  await sleep(DEFAULT_DELAY_MS);
-  await proxyCallWithRetry(
+  const createdDeliverable = await proxyCallWithRetry<Record<string, any>>(
     destinationApiKey,
-    `/lifecycle-manager/v1/deliverables/${createdId}`,
-    "PATCH",
-    patchBody
+    `/lifecycle-manager/v1/deliverables/${createdId}`
   );
+  const createdSections =
+    isRecord(createdDeliverable.deliverable) &&
+    Array.isArray(createdDeliverable.deliverable.sections)
+      ? createdDeliverable.deliverable.sections
+      : Array.isArray(createdDeliverable.sections)
+      ? createdDeliverable.sections
+      : [];
+
+  if (createdSections.length !== createBody.sections.length) {
+    warnings.push(
+      buildWarning(
+        destinationClient.name,
+        OBJECT_LABELS.deliverables,
+        getRecordName(record, "Migrated Deliverable"),
+        "Deliverable created, but destination section count did not match source configuration."
+      )
+    );
+  }
 
   return {
     newId: createdId,
