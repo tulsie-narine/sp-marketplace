@@ -36,7 +36,7 @@ const OBJECT_OPTIONS: { key: keyof SelectedObjects; label: string }[] = [
   { key: "notes", label: "Notes" },
   { key: "actionItems", label: "Action Items" },
   { key: "contracts", label: "Contracts" },
-  { key: "assessments", label: "Assessments" },
+  { key: "assessments", label: "Assessment (Coming Soon!)" },
   { key: "meetings", label: "Meetings" },
   { key: "deliverables", label: "Deliverables" },
 ];
@@ -49,7 +49,7 @@ const DEFAULT_SELECTED_OBJECTS: SelectedObjects = {
   notes: true,
   actionItems: true,
   contracts: true,
-  assessments: true,
+  assessments: false,
   meetings: true,
   deliverables: true,
 };
@@ -690,14 +690,21 @@ export function TenantMigrationWorkspace() {
       </div>
 
       <div className="space-y-3">
-        {OBJECT_OPTIONS.map((option) => (
+        {OBJECT_OPTIONS.map((option) => {
+          const isDisabled = option.key === "assessments";
+
+          return (
           <label
             key={option.key}
-            className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface-raised px-4 py-3 transition-colors hover:border-primary/40"
+            className={classNames(
+              "flex items-start gap-3 rounded-md border border-border bg-surface-raised px-4 py-3 transition-colors",
+              isDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-primary/40"
+            )}
           >
             <input
               type="checkbox"
               checked={selectedObjects[option.key]}
+              disabled={isDisabled}
               onChange={(event) =>
                 setSelectedObjects((prev) => ({
                   ...prev,
@@ -708,7 +715,8 @@ export function TenantMigrationWorkspace() {
             />
             <span className="text-sm text-foreground">{option.label}</span>
           </label>
-        ))}
+          );
+        })}
       </div>
 
       {selectedObjects.actionItems && (
