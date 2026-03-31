@@ -133,6 +133,11 @@ interface DestinationMember {
   email: string;
 }
 
+interface DestinationMeetingType {
+  id: string;
+  label: string;
+}
+
 interface PendingRelationship {
   clientName: string;
   type: RelationshipLogEntry["type"];
@@ -533,13 +538,29 @@ function normalizeDueAt(value: unknown): string | null {
   return isIsoDateTime(value) ? value : null;
 }
 
-function resolveMeetingTypeId(record: Record<string, any>): string | null {
-  const explicitId =
-    asText(record.meeting_type?.meeting_type_id) ||
-    asText(record.meeting_type?.id) ||
-    asText(record.type_id);
+function normalizeMeetingTypeLabel(value: unknown): string | null {
+  const text = asText(value);
+  if (!text) return null;
+  return text.replace(/[\s\-_]+/g, "").toLowerCase();
+}
 
-  return explicitId || null;
+function resolveMeetingTypeId(
+  record: Record<string, any>,
+  destinationMeetingTypes: DestinationMeetingType[]
+): string | null {
+  const normalizedSourceLabel =
+    normalizeMeetingTypeLabel(record.meeting_type?.label) ||
+    normalizeMeetingTypeLabel(record.type) ||
+    normalizeMeetingTypeLabel(record.meeting_type?.type);
+
+  if (!normalizedSourceLabel) return null;
+
+  return (
+    destinationMeetingTypes.find(
+      (meetingType) =>
+        normalizeMeetingTypeLabel(meetingType.label) === normalizedSourceLabel
+    )?.id || null
+  );
 }
 
 function buildProseMirrorJson(text: string) {
@@ -1012,6 +1033,23 @@ async function fetchDestinationMembers(
   return results;
 }
 
+async function fetchDestinationMeetingTypes(
+  apiKey: string
+): Promise<DestinationMeetingType[]> {
+  const response = await proxyCallWithRetry<{
+    data?: Record<string, unknown>[];
+  }>(apiKey, "/lifecycle-manager/v1/meeting-types");
+
+  return (response.data || [])
+    .map((item) => {
+      const id =
+        asText(item.meeting_type_id) || asText(item.id) || null;
+      const label = asText(item.label);
+      return id && label ? { id, label } : null;
+    })
+    .filter((item): item is DestinationMeetingType => Boolean(item));
+}
+
 async function findDestinationMemberIdByEmailViaApi(
   apiKey: string,
   email: string | null | undefined
@@ -1288,6 +1326,7 @@ async function migrateRecord(
   record: Record<string, any>,
   actionItemAssigneeEmail?: string | null,
   destinationMembers: DestinationMember[] = [],
+  destinationMeetingTypes: DestinationMeetingType[] = [],
   deliverableClientIdCache: Map<string, string> = new Map()
 ): Promise<{
   newId?: string;
@@ -1651,7 +1690,7 @@ async function migrateRecord(
   }
 
   if (type === "meetings") {
-    const meetingTypeId = resolveMeetingTypeId(record);
+    const meetingTypeId = resolveMeetingTypeId(record, destinationMeetingTypes);
     const body = {
       client_key: { id: destinationClientId },
       title:
@@ -1908,6 +1947,7 @@ export async function runTenantMigration({
   let totalCreated = 0;
   let totalFailures = 0;
   let destinationMembers: DestinationMember[] = [];
+  let destinationMeetingTypes: DestinationMeetingType[] = [];
 
   const sourceDeliverableClientIdCache = new Map<string, string>();
   const destinationDeliverableClientIdCache = new Map<string, string>();
@@ -1923,6 +1963,16 @@ export async function runTenantMigration({
       destinationMembers = await fetchDestinationMembers(destinationApiKey);
     } catch {
       destinationMembers = [];
+    }
+  }
+
+  if (selectedObjects.meetings) {
+    try {
+      destinationMeetingTypes = await fetchDestinationMeetingTypes(
+        destinationApiKey
+      );
+    } catch {
+      destinationMeetingTypes = [];
     }
   }
 
@@ -1997,6 +2047,7 @@ export async function runTenantMigration({
             record,
             actionItemAssigneeEmail,
             destinationMembers,
+            destinationMeetingTypes,
             destinationDeliverableClientIdCache
           );
           progress.objects[type].succeeded += 1;
