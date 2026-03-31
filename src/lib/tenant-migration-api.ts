@@ -533,6 +533,24 @@ function normalizeDueAt(value: unknown): string | null {
   return isIsoDateTime(value) ? value : null;
 }
 
+function normalizeMeetingType(value: unknown): string {
+  const normalized = (asText(value) || "")
+    .replace(/[\s-_]+/g, "")
+    .toLowerCase();
+
+  const meetingTypeMap: Record<string, string> = {
+    businessreview: "BusinessReview",
+    annualbusinessreview: "AnnualBusinessReview",
+    discovery: "Discovery",
+    onboarding: "Onboarding",
+    checkin: "CheckIn",
+    phonecall: "PhoneCall",
+    projectmeeting: "ProjectMeeting",
+  };
+
+  return meetingTypeMap[normalized] || "BusinessReview";
+}
+
 function buildProseMirrorJson(text: string) {
   return JSON.stringify({
     type: "doc",
@@ -551,6 +569,7 @@ function buildContractCreatePayload(record: Record<string, any>) {
     : {};
   const resolvedBillingStartAt =
     asText(nested.billing_start_at) ||
+    asText(nested.billing_next_due_at) ||
     asText(nested.billing_date) ||
     asText(nested.next_due) ||
     asText(nested.next_due_at) ||
@@ -558,6 +577,7 @@ function buildContractCreatePayload(record: Record<string, any>) {
     asText(nested.renewal_date) ||
     asText(nested.renewal_at) ||
     asText(record.billing_start_at) ||
+    asText(record.billing_next_due_at) ||
     asText(record.billing_date) ||
     asText(record.next_due) ||
     asText(record.next_due_at) ||
@@ -1490,6 +1510,7 @@ async function migrateRecord(
   if (type === "contracts") {
     const billingStartAt =
       asText(record.billing_start_at) ||
+      asText(record.billing_next_due_at) ||
       asText(record.billing_date) ||
       asText(record.next_due) ||
       asText(record.next_due_at) ||
@@ -1502,6 +1523,7 @@ async function migrateRecord(
 
     if (
       !asText(record.billing_start_at) &&
+      !asText(record.billing_next_due_at) &&
       !asText(record.billing_date) &&
       !asText(record.next_due) &&
       !asText(record.next_due_at) &&
@@ -1646,7 +1668,11 @@ async function migrateRecord(
         asText(record.subject) ||
         asText(record.topic) ||
         "Untitled Meeting",
-      type: null,
+      type: normalizeMeetingType(
+        asText(record.meeting_type?.label) ||
+          asText(record.meeting_type?.type) ||
+          asText(record.type)
+      ),
       starts_at: isIsoDateTime(record.starts_at) ? record.starts_at : null,
       ends_at: isIsoDateTime(record.ends_at) ? record.ends_at : null,
       agenda_json: record.agenda_json ?? null,
@@ -1657,15 +1683,6 @@ async function migrateRecord(
       "/lifecycle-manager/v2/meetings",
       "POST",
       body
-    );
-
-    warnings.push(
-      buildWarning(
-        destinationClient.name,
-        OBJECT_LABELS.meetings,
-        recordName,
-        "Meeting created. Type and full details not updated - meeting type IDs are tenant-specific and cannot be migrated."
-      )
     );
 
     if (record.completion_status) {
