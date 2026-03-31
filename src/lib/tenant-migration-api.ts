@@ -1123,55 +1123,26 @@ async function resolveDeliverableClientId(
 ): Promise<string> {
   const cached = cache.get(client.id);
   if (cached) return cached;
-
-  const candidates = new Set<string>();
-  const attemptedCandidates: { candidate: string; result: string }[] = [];
-  const direct = getShortClientIdCandidate(client);
-  if (direct) candidates.add(direct);
-
-  const params = new URLSearchParams({ "filter[id]": client.id });
-  const response = await proxyCallWithRetry<{
-    data?: Record<string, unknown>[] | Record<string, unknown>;
-  }>(apiKey, `/core/v1/clients?${params.toString()}`);
-
-  const detailedClient = Array.isArray(response.data)
-    ? response.data[0]
-    : isRecord(response.data)
-    ? response.data
-    : null;
-
-  if (detailedClient) {
-    const detailedCandidate = getShortClientIdCandidate(detailedClient);
-    if (detailedCandidate) candidates.add(detailedCandidate);
-    const discovered = new Set<string>();
-    collectShortIdCandidates(detailedClient, discovered);
-    for (const candidate of discovered) {
-      candidates.add(candidate);
-    }
-  }
-
-  for (const candidate of candidates) {
-    const result = await candidateWorksForDeliverables(apiKey, candidate);
-    attemptedCandidates.push({
-      candidate,
-      result: result.works ? "ok" : result.detail || "unusable",
-    });
-    if (result.works) {
-      cache.set(client.id, candidate);
-      return candidate;
-    }
+  const directResult = await candidateWorksForDeliverables(apiKey, client.id);
+  if (directResult.works) {
+    cache.set(client.id, client.id);
+    return client.id;
   }
 
   throw buildApiError(
-    "Deliverables skipped - no valid deliverables client identifier could be resolved from the client record.",
+    "Deliverables skipped - source client id was rejected by the deliverables endpoint.",
     `/lifecycle-manager/v1/clients/${encodeURIComponent(client.id)}/deliverables`,
     "GET",
     {
       source_client_id: client.id,
       source_client_name: client.name,
-      direct_candidate: direct,
-      attempted_candidates: attemptedCandidates,
-      source_client_record: detailedClient || client,
+      attempted_candidates: [
+        {
+          candidate: client.id,
+          result: directResult.detail || "unusable",
+        },
+      ],
+      source_client_record: client,
     }
   );
 }
