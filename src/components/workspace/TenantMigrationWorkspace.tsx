@@ -31,13 +31,13 @@ import {
 const PAGE_SIZE = 8;
 const FINAL_TABS = ["summary", "errors", "relationships"] as const;
 const OBJECT_OPTIONS: { key: keyof SelectedObjects; label: string }[] = [
-  { key: "initiatives", label: "Initiatives (Roadmap)" },
+  { key: "initiatives", label: "Initiatives" },
   { key: "goals", label: "Goals" },
   { key: "notes", label: "Notes" },
   { key: "actionItems", label: "Action Items" },
   { key: "contracts", label: "Contracts" },
   { key: "assessments", label: "Assessments" },
-  { key: "meetings", label: "Meetings (includes attendees and action item links)" },
+  { key: "meetings", label: "Meetings" },
   { key: "deliverables", label: "Deliverables" },
 ];
 
@@ -234,6 +234,8 @@ export function TenantMigrationWorkspace() {
     () => Object.values(selectedObjects).filter(Boolean).length,
     [selectedObjects]
   );
+  const requiresAssigneeEmail = selectedObjects.actionItems;
+  const hasValidAssigneeEmail = actionItemAssigneeEmail.trim().length > 0;
 
   const completedClients = useMemo(
     () =>
@@ -719,11 +721,9 @@ export function TenantMigrationWorkspace() {
             value={actionItemAssigneeEmail}
             onChange={(event) => setActionItemAssigneeEmail(event.target.value)}
             placeholder="name@company.com"
+            required
             className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           />
-          <p className="mt-2 text-xs text-muted-foreground">
-            Used when the original assignee cannot be resolved in the destination tenant. Recommended: your MSP's primary ScalePad user email.
-          </p>
         </div>
       )}
 
@@ -741,7 +741,7 @@ export function TenantMigrationWorkspace() {
         </button>
         <button
           onClick={handleStartMigration}
-          disabled={selectedObjectCount === 0}
+          disabled={selectedObjectCount === 0 || (requiresAssigneeEmail && !hasValidAssigneeEmail)}
           className="inline-flex items-center gap-2 rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Start Migration
