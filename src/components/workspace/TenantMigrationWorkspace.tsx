@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  CircleDashed,
   Loader2,
   Search,
   TriangleAlert,
@@ -198,16 +197,10 @@ export function TenantMigrationWorkspace() {
   const [screenOneError, setScreenOneError] = useState<string | null>(null);
   const [finalTab, setFinalTab] = useState<FinalTab>("summary");
 
-  const [destinationSearch, setDestinationSearch] = useState("");
   const [sourceSearch, setSourceSearch] = useState("");
-  const [destinationPage, setDestinationPage] = useState(1);
   const [sourcePage, setSourcePage] = useState(1);
   const [errorClientFilter, setErrorClientFilter] = useState("all");
   const [errorObjectFilter, setErrorObjectFilter] = useState("all");
-
-  useEffect(() => {
-    setDestinationPage(1);
-  }, [destinationSearch]);
 
   useEffect(() => {
     setSourcePage(1);
@@ -221,24 +214,13 @@ export function TenantMigrationWorkspace() {
   const mappedCount = mappedClients.length;
   const skippedCount = clientMappings.filter((mapping) => mapping.skip || !mapping.dstClientId).length;
 
-  const filteredDestinationClients = useMemo(() => {
-    const query = destinationSearch.trim().toLowerCase();
-    if (!query) return destinationClients;
-    return destinationClients.filter((client) => client.name.toLowerCase().includes(query));
-  }, [destinationClients, destinationSearch]);
-
   const filteredSourceClients = useMemo(() => {
     const query = sourceSearch.trim().toLowerCase();
     if (!query) return sourceClients;
     return sourceClients.filter((client) => client.name.toLowerCase().includes(query));
   }, [sourceClients, sourceSearch]);
 
-  const destinationTotalPages = Math.max(1, Math.ceil(filteredDestinationClients.length / PAGE_SIZE));
   const sourceTotalPages = Math.max(1, Math.ceil(filteredSourceClients.length / PAGE_SIZE));
-  const pagedDestinationClients = filteredDestinationClients.slice(
-    (destinationPage - 1) * PAGE_SIZE,
-    destinationPage * PAGE_SIZE
-  );
   const pagedSourceClients = filteredSourceClients.slice((sourcePage - 1) * PAGE_SIZE, sourcePage * PAGE_SIZE);
 
   const destinationOptions = useMemo(
@@ -480,9 +462,7 @@ export function TenantMigrationWorkspace() {
     setMigrationRunning(false);
     setScreenOneError(null);
     setFinalTab("summary");
-    setDestinationSearch("");
     setSourceSearch("");
-    setDestinationPage(1);
     setSourcePage(1);
     setErrorClientFilter("all");
     setErrorObjectFilter("all");
@@ -568,124 +548,87 @@ export function TenantMigrationWorkspace() {
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr,72px,1fr]">
-        <div className="flex min-h-[560px] flex-col rounded-lg border border-border bg-card">
-          <div className="space-y-3 border-b border-border p-4">
-            <div className="flex items-center gap-2">
-              <h4 className="font-heading text-sm font-bold text-foreground">Destination Tenant</h4>
-              <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
-                {destinationClients.length}
-              </span>
-            </div>
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="text"
-                value={destinationSearch}
-                onChange={(event) => setDestinationSearch(event.target.value)}
-                placeholder="Search destination clients..."
-                className="h-8 w-full rounded-md border border-border bg-surface-raised pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </div>
+      <div className="flex min-h-[560px] flex-col rounded-lg border border-border bg-card">
+        <div className="space-y-3 border-b border-border p-4">
+          <div className="flex items-center gap-2">
+            <h4 className="font-heading text-sm font-bold text-foreground">Source -&gt; Destination Tenant Mapping</h4>
+            <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
+              {sourceClients.length}
+            </span>
           </div>
-
-          <div className="flex-1 overflow-y-auto">
-            {pagedDestinationClients.length === 0 ? (
-              <p className="py-8 text-center text-xs text-muted-foreground">No destination clients found.</p>
-            ) : (
-              pagedDestinationClients.map((client) => {
-                const isMapped = clientMappings.some((mapping) => mapping.dstClientId === client.id && !mapping.skip);
-                return (
-                  <div
-                    key={client.id}
-                    className={classNames(
-                      "border-b border-border px-4 py-3",
-                      isMapped && "bg-primary/10"
-                    )}
-                  >
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className="truncate text-xs font-medium text-foreground">{client.name}</span>
-                      <StatusBadge value={client.lifecycle} />
-                    </div>
-                    <p className="text-[11px] text-muted-foreground">{client.num_hardware_assets} assets</p>
-                  </div>
-                );
-              })
-            )}
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              value={sourceSearch}
+              onChange={(event) => setSourceSearch(event.target.value)}
+              placeholder="Search source clients to map..."
+              className="h-9 w-full rounded-md border border-border bg-surface-raised pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            />
           </div>
-          <Pagination page={destinationPage} totalPages={destinationTotalPages} onPageChange={setDestinationPage} />
         </div>
 
-        <div className="hidden rounded-lg border border-border bg-card p-3 xl:block">
-          <div className="flex h-full flex-col items-center justify-start pt-[96px]">
-            {pagedSourceClients.map((client) => {
+        <div className="flex-1 overflow-y-auto">
+          {pagedSourceClients.length === 0 ? (
+            <p className="py-8 text-center text-xs text-muted-foreground">No source clients found.</p>
+          ) : (
+            pagedSourceClients.map((client) => {
               const mapping = mappingLookup.get(client.id);
-              const isMapped = Boolean(mapping?.dstClientId) && !mapping?.skip;
+              const mappedDestination =
+                mapping?.dstClientId && !mapping.skip ? destinationLookup.get(mapping.dstClientId) || null : null;
+
               return (
-                <div key={client.id} className="flex h-[68px] items-center justify-center">
-                  {isMapped ? <ArrowRight className="h-4 w-4 text-primary" /> : <CircleDashed className="h-4 w-4 text-muted-foreground" />}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="flex min-h-[560px] flex-col rounded-lg border border-border bg-card">
-          <div className="space-y-3 border-b border-border p-4">
-            <div className="flex items-center gap-2">
-              <h4 className="font-heading text-sm font-bold text-foreground">Source Tenant</h4>
-              <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
-                {sourceClients.length}
-              </span>
-            </div>
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="text"
-                value={sourceSearch}
-                onChange={(event) => setSourceSearch(event.target.value)}
-                placeholder="Search source clients..."
-                className="h-8 w-full rounded-md border border-border bg-surface-raised pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto">
-            {pagedSourceClients.length === 0 ? (
-              <p className="py-8 text-center text-xs text-muted-foreground">No source clients found.</p>
-            ) : (
-              pagedSourceClients.map((client) => {
-                const mapping = mappingLookup.get(client.id);
-                return (
-                  <div key={client.id} className="space-y-3 border-b border-border px-4 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-medium text-foreground">{client.name}</p>
-                        <div className="mt-1 flex items-center gap-2">
-                          <StatusBadge value={client.lifecycle} />
-                          <span className="text-[11px] text-muted-foreground">{client.num_hardware_assets} assets</span>
-                        </div>
+                <div key={client.id} className="space-y-3 border-b border-border px-4 py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">{client.name}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <StatusBadge value={client.lifecycle} />
+                        <span className="text-[11px] text-muted-foreground">{client.num_hardware_assets} assets</span>
                       </div>
                     </div>
-                    <select
-                      value={mapping?.skip || !mapping?.dstClientId ? "skip" : mapping.dstClientId}
-                      onChange={(event) => updateMapping(client.id, event.target.value)}
-                      className="h-9 w-full rounded-md border border-border bg-surface-raised px-3 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                    >
-                      <option value="skip">Do Not Migrate</option>
-                      {destinationOptions.map((destinationClient) => (
-                        <option key={destinationClient.id} value={destinationClient.id}>
-                          {destinationClient.name}
-                        </option>
-                      ))}
-                    </select>
                   </div>
-                );
-              })
-            )}
-          </div>
-          <Pagination page={sourcePage} totalPages={sourceTotalPages} onPageChange={setSourcePage} />
+
+                  <div
+                    className={classNames(
+                      "rounded-lg border px-3 py-3",
+                      mappedDestination ? "border-primary/30 bg-primary/10" : "border-border bg-surface-raised"
+                    )}
+                  >
+                    {mappedDestination ? (
+                      <div className="space-y-1 text-xs">
+                        <div className="flex flex-wrap items-center gap-2 text-foreground">
+                          <span className="font-medium">{client.name}</span>
+                          <ArrowRight className="h-3.5 w-3.5 text-primary" />
+                          <span className="font-medium">{mappedDestination.name}</span>
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {client.num_hardware_assets} assets -&gt; {mappedDestination.num_hardware_assets} assets
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-muted-foreground">This source client is currently set to Do Not Migrate.</div>
+                    )}
+                  </div>
+
+                  <select
+                    value={mapping?.skip || !mapping?.dstClientId ? "skip" : mapping.dstClientId}
+                    onChange={(event) => updateMapping(client.id, event.target.value)}
+                    className="h-10 w-full rounded-md border border-border bg-surface-raised px-3 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    <option value="skip">Do Not Migrate</option>
+                    {destinationOptions.map((destinationClient) => (
+                      <option key={destinationClient.id} value={destinationClient.id}>
+                        {destinationClient.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })
+          )}
         </div>
+        <Pagination page={sourcePage} totalPages={sourceTotalPages} onPageChange={setSourcePage} />
       </div>
 
       <div className="flex items-center justify-between gap-3">
