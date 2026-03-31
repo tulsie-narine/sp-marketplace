@@ -1098,7 +1098,7 @@ function findDestinationMemberIdByEmail(
 async function candidateWorksForDeliverables(
   apiKey: string,
   candidate: string
-) {
+): Promise<{ works: boolean; detail?: string }> {
   try {
     await proxyCallWithRetry(
       apiKey,
@@ -1106,10 +1106,12 @@ async function candidateWorksForDeliverables(
         candidate
       )}/deliverables?page_size=1`
     );
-    return true;
+    return { works: true };
   } catch (error) {
     const detail = error instanceof Error ? error.message : "";
-    if (detail.startsWith("404") || detail.startsWith("422")) return false;
+    if (detail.startsWith("404") || detail.startsWith("422")) {
+      return { works: false, detail };
+    }
     throw error;
   }
 }
@@ -1123,6 +1125,7 @@ async function resolveDeliverableClientId(
   if (cached) return cached;
 
   const candidates = new Set<string>();
+  const attemptedCandidates: { candidate: string; result: string }[] = [];
   const direct = getShortClientIdCandidate(client);
   if (direct) candidates.add(direct);
 
@@ -1148,14 +1151,28 @@ async function resolveDeliverableClientId(
   }
 
   for (const candidate of candidates) {
-    if (await candidateWorksForDeliverables(apiKey, candidate)) {
+    const result = await candidateWorksForDeliverables(apiKey, candidate);
+    attemptedCandidates.push({
+      candidate,
+      result: result.works ? "ok" : result.detail || "unusable",
+    });
+    if (result.works) {
       cache.set(client.id, candidate);
       return candidate;
     }
   }
 
-  throw new Error(
-    "Deliverables skipped - no valid deliverables client identifier could be resolved from the client record."
+  throw buildApiError(
+    "Deliverables skipped - no valid deliverables client identifier could be resolved from the client record.",
+    `/lifecycle-manager/v1/clients/${encodeURIComponent(client.id)}/deliverables`,
+    "GET",
+    {
+      source_client_id: client.id,
+      source_client_name: client.name,
+      direct_candidate: direct,
+      attempted_candidates: attemptedCandidates,
+      source_client_record: detailedClient || client,
+    }
   );
 }
 
