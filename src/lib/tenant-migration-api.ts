@@ -533,22 +533,13 @@ function normalizeDueAt(value: unknown): string | null {
   return isIsoDateTime(value) ? value : null;
 }
 
-function normalizeMeetingType(value: unknown): string {
-  const normalized = (asText(value) || "")
-    .replace(/[\s-_]+/g, "")
-    .toLowerCase();
+function resolveMeetingTypeId(record: Record<string, any>): string | null {
+  const explicitId =
+    asText(record.meeting_type?.meeting_type_id) ||
+    asText(record.meeting_type?.id) ||
+    asText(record.type_id);
 
-  const meetingTypeMap: Record<string, string> = {
-    businessreview: "BusinessReview",
-    annualbusinessreview: "AnnualBusinessReview",
-    discovery: "Discovery",
-    onboarding: "Onboarding",
-    checkin: "CheckIn",
-    phonecall: "PhoneCall",
-    projectmeeting: "ProjectMeeting",
-  };
-
-  return meetingTypeMap[normalized] || "BusinessReview";
+  return explicitId || null;
 }
 
 function buildProseMirrorJson(text: string) {
@@ -1660,6 +1651,7 @@ async function migrateRecord(
   }
 
   if (type === "meetings") {
+    const meetingTypeId = resolveMeetingTypeId(record);
     const body = {
       client_key: { id: destinationClientId },
       title:
@@ -1668,11 +1660,7 @@ async function migrateRecord(
         asText(record.subject) ||
         asText(record.topic) ||
         "Untitled Meeting",
-      type: normalizeMeetingType(
-        asText(record.meeting_type?.label) ||
-          asText(record.meeting_type?.type) ||
-          asText(record.type)
-      ),
+      type: meetingTypeId,
       starts_at: isIsoDateTime(record.starts_at) ? record.starts_at : null,
       ends_at: isIsoDateTime(record.ends_at) ? record.ends_at : null,
       agenda_json: record.agenda_json ?? null,
@@ -1684,6 +1672,17 @@ async function migrateRecord(
       "POST",
       body
     );
+
+    if (!meetingTypeId) {
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.meetings,
+          recordName,
+          "Meeting type ID was unavailable on source - created meeting without a type."
+        )
+      );
+    }
 
     if (record.completion_status) {
       await sleep(DEFAULT_DELAY_MS);
