@@ -922,9 +922,9 @@ async function collectClientRelationshipsFromSource(
     if (meeting.agenda_json) {
       pushRelationship({
         clientName: "",
-        type: "Meeting Notes",
+        type: "Agenda / Notes",
         sourceRecord: meetingName,
-        targetRecord: "Agenda / Notes",
+        targetRecord: "Meeting",
         sourceSourceId: meetingId,
         targetSourceId: meetingId,
       });
@@ -2070,7 +2070,7 @@ async function createRelationships(
             "Goal ↔ Action Item relationship not directly supported by the API - linked via Goal ↔ Initiative instead.",
         });
         continue;
-      } else if (item.type === "Meeting Notes") {
+      } else if (item.type === "Agenda / Notes") {
         const meetingId = idMaps.meetings.get(item.sourceSourceId);
         log.push({
           clientName,
@@ -2079,7 +2079,7 @@ async function createRelationships(
           targetRecord: item.targetRecord,
           status: meetingId ? "created" : "skipped",
           detail: meetingId
-            ? "Meeting notes migrated with agenda_json."
+            ? "Meeting notes migrated with agenda_json"
             : "Linked destination record did not migrate",
         });
         continue;
