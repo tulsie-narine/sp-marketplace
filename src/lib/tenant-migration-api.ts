@@ -1184,14 +1184,14 @@ function remapDeliverableComponentConfiguration(
   configuration: unknown,
   sourceAssessmentTemplateTitlesById: Map<string, string>,
   destinationAssessmentTemplateIdsByTitle: Map<string, string>
-) {
+): { configuration: unknown; skippedReason?: string } {
   if (componentKey !== "Assessments" || configuration === undefined) {
-    return configuration;
+    return { configuration };
   }
 
   const clonedConfiguration = cloneJsonValue(configuration);
   if (!isRecord(clonedConfiguration) || !isRecord(clonedConfiguration.data)) {
-    return clonedConfiguration;
+    return { configuration: clonedConfiguration };
   }
 
   const assessmentReports = Array.isArray(clonedConfiguration.data.assessment_reports)
@@ -1208,9 +1208,10 @@ function remapDeliverableComponentConfiguration(
       sourceAssessmentTemplateTitlesById.get(sourceTemplateId) || null;
 
     if (!sourceTemplateTitle) {
-      throw new Error(
-        `Deliverable skipped - source assessment template ${sourceTemplateId} could not be resolved.`
-      );
+      return {
+        configuration: clonedConfiguration,
+        skippedReason: `Assessments component skipped - source assessment template ${sourceTemplateId} could not be resolved.`,
+      };
     }
 
     const destinationTemplateId =
@@ -1219,30 +1220,91 @@ function remapDeliverableComponentConfiguration(
       ) || null;
 
     if (!destinationTemplateId) {
-      throw new Error(
-        `Deliverable skipped - destination assessment template '${sourceTemplateTitle}' could not be resolved.`
-      );
+      return {
+        configuration: clonedConfiguration,
+        skippedReason: `Assessments component skipped - destination assessment template '${sourceTemplateTitle}' could not be resolved.`,
+      };
     }
 
     report.assessment_template_id = destinationTemplateId;
   }
 
-  return clonedConfiguration;
+  return { configuration: clonedConfiguration };
 }
 
 function buildDeliverableCreatePayload(
+  clientName: string,
   record: Record<string, any>,
   sourceAssessmentTemplateTitlesById: Map<string, string>,
   destinationAssessmentTemplateIdsByTitle: Map<string, string>
 ) {
   const sourceSections = Array.isArray(record.sections) ? record.sections : [];
+  const warnings: MigrationErrorEntry[] = [];
 
-  return {
+  const payload = {
     name: asText(record.name) || asText(record.title) || "Migrated Deliverable",
-    sections: sourceSections.map((section, sectionIndex) => {
+    sections: sourceSections
+      .map((section, sectionIndex) => {
       const sourceComponents = Array.isArray(section?.components)
         ? section.components
         : [];
+
+      const components = sourceComponents
+        .map((component) => {
+          const componentKey = asText(component?.component_key);
+          const componentTypeConfiguration = isRecord(
+            component?.component_type_configuration
+          )
+            ? component.component_type_configuration
+            : null;
+
+          if (!componentKey || !componentTypeConfiguration) {
+            return null;
+          }
+
+          let configuration: unknown = undefined;
+          if (component?.configuration !== undefined) {
+            const remappedComponent = remapDeliverableComponentConfiguration(
+              componentKey,
+              component.configuration,
+              sourceAssessmentTemplateTitlesById,
+              destinationAssessmentTemplateIdsByTitle
+            );
+
+            if (remappedComponent.skippedReason) {
+              warnings.push(
+                buildWarning(
+                  clientName,
+                  OBJECT_LABELS.deliverables,
+                  getRecordName(record, "Migrated Deliverable"),
+                  remappedComponent.skippedReason
+                )
+              );
+              return null;
+            }
+
+            configuration = remappedComponent.configuration;
+          }
+
+          return {
+            component_key: componentKey,
+            component_type_configuration: componentTypeConfiguration,
+            ...(configuration !== undefined ? { configuration } : {}),
+          };
+        })
+        .filter(
+          (
+            component
+          ): component is {
+            component_key: string;
+            component_type_configuration: Record<string, unknown>;
+            configuration?: unknown;
+          } => Boolean(component)
+        );
+
+      if (components.length === 0) {
+        return null;
+      }
 
       return {
         section_key:
@@ -1256,46 +1318,13 @@ function buildDeliverableCreatePayload(
         ...(asText(section?.summary_json)
           ? { summary_json: asText(section.summary_json) }
           : {}),
-        components: sourceComponents
-          .map((component) => {
-            const componentKey = asText(component?.component_key);
-            const componentTypeConfiguration = isRecord(
-              component?.component_type_configuration
-            )
-              ? component.component_type_configuration
-              : null;
-
-            if (!componentKey || !componentTypeConfiguration) {
-              return null;
-            }
-
-            return {
-              component_key: componentKey,
-              component_type_configuration: componentTypeConfiguration,
-              ...(component?.configuration !== undefined
-                ? {
-                    configuration: remapDeliverableComponentConfiguration(
-                      componentKey,
-                      component.configuration,
-                      sourceAssessmentTemplateTitlesById,
-                      destinationAssessmentTemplateIdsByTitle
-                    ),
-                  }
-                : {}),
-            };
-          })
-          .filter(
-            (
-              component
-            ): component is {
-              component_key: string;
-              component_type_configuration: Record<string, unknown>;
-              configuration?: unknown;
-            } => Boolean(component)
-          ),
+        components,
       };
-    }),
+    })
+      .filter((section): section is NonNullable<typeof section> => Boolean(section)),
   };
+
+  return { payload, warnings };
 }
 
 function collectRelationships(
@@ -1921,11 +1950,14 @@ async function migrateRecord(
     destinationClient,
     deliverableClientIdCache
   );
-  const createBody = buildDeliverableCreatePayload(
+  const deliverablePayload = buildDeliverableCreatePayload(
+    destinationClient.name,
     record,
     sourceAssessmentTemplateTitlesById,
     destinationAssessmentTemplateIdsByTitle
   );
+  warnings.push(...deliverablePayload.warnings);
+  const createBody = deliverablePayload.payload;
   if (
     !Array.isArray(createBody.sections) ||
     createBody.sections.length === 0
