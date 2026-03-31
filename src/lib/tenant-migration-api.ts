@@ -924,7 +924,7 @@ async function collectClientRelationshipsFromSource(
         clientName: "",
         type: "Agenda / Notes",
         sourceRecord: meetingName,
-        targetRecord: "Meeting",
+        targetRecord: "Agenda",
         sourceSourceId: meetingId,
         targetSourceId: meetingId,
       });
@@ -2078,9 +2078,7 @@ async function createRelationships(
           sourceRecord: item.sourceRecord,
           targetRecord: item.targetRecord,
           status: meetingId ? "created" : "skipped",
-          detail: meetingId
-            ? "Meeting notes migrated with agenda_json"
-            : "Linked destination record did not migrate",
+          detail: meetingId ? undefined : "Linked destination record did not migrate",
         });
         continue;
       } else if (item.type === "Meeting ↔ Action Item") {
