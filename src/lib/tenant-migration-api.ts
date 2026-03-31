@@ -138,6 +138,11 @@ interface DestinationMeetingType {
   label: string;
 }
 
+interface AssessmentTemplateOverview {
+  id: string;
+  title: string;
+}
+
 interface PendingRelationship {
   clientName: string;
   type: RelationshipLogEntry["type"];
@@ -1147,7 +1152,89 @@ async function resolveDeliverableClientId(
   );
 }
 
-function buildDeliverableCreatePayload(record: Record<string, any>) {
+function normalizeTemplateTitle(value: string | null | undefined) {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, " ");
+  return normalized || null;
+}
+
+async function fetchAssessmentTemplates(
+  apiKey: string
+): Promise<AssessmentTemplateOverview[]> {
+  const response = await proxyCallWithRetry<{
+    data?: Record<string, unknown>[];
+  }>(apiKey, "/lifecycle-manager/v1/assessment-templates");
+
+  return (response.data || [])
+    .map((item) => {
+      const id = asText(item.assessment_template_id) || asText(item.id);
+      const title = asText(item.title);
+      return id && title ? { id, title } : null;
+    })
+    .filter((item): item is AssessmentTemplateOverview => Boolean(item));
+}
+
+function cloneJsonValue<T>(value: T): T {
+  if (value === undefined) return value;
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function remapDeliverableComponentConfiguration(
+  componentKey: string,
+  configuration: unknown,
+  sourceAssessmentTemplateTitlesById: Map<string, string>,
+  destinationAssessmentTemplateIdsByTitle: Map<string, string>
+) {
+  if (componentKey !== "Assessments" || configuration === undefined) {
+    return configuration;
+  }
+
+  const clonedConfiguration = cloneJsonValue(configuration);
+  if (!isRecord(clonedConfiguration) || !isRecord(clonedConfiguration.data)) {
+    return clonedConfiguration;
+  }
+
+  const assessmentReports = Array.isArray(clonedConfiguration.data.assessment_reports)
+    ? clonedConfiguration.data.assessment_reports
+    : [];
+
+  for (const report of assessmentReports) {
+    if (!isRecord(report)) continue;
+
+    const sourceTemplateId = asText(report.assessment_template_id);
+    if (!sourceTemplateId) continue;
+
+    const sourceTemplateTitle =
+      sourceAssessmentTemplateTitlesById.get(sourceTemplateId) || null;
+
+    if (!sourceTemplateTitle) {
+      throw new Error(
+        `Deliverable skipped - source assessment template ${sourceTemplateId} could not be resolved.`
+      );
+    }
+
+    const destinationTemplateId =
+      destinationAssessmentTemplateIdsByTitle.get(
+        normalizeTemplateTitle(sourceTemplateTitle) || ""
+      ) || null;
+
+    if (!destinationTemplateId) {
+      throw new Error(
+        `Deliverable skipped - destination assessment template '${sourceTemplateTitle}' could not be resolved.`
+      );
+    }
+
+    report.assessment_template_id = destinationTemplateId;
+  }
+
+  return clonedConfiguration;
+}
+
+function buildDeliverableCreatePayload(
+  record: Record<string, any>,
+  sourceAssessmentTemplateTitlesById: Map<string, string>,
+  destinationAssessmentTemplateIdsByTitle: Map<string, string>
+) {
   const sourceSections = Array.isArray(record.sections) ? record.sections : [];
 
   return {
@@ -1186,7 +1273,14 @@ function buildDeliverableCreatePayload(record: Record<string, any>) {
               component_key: componentKey,
               component_type_configuration: componentTypeConfiguration,
               ...(component?.configuration !== undefined
-                ? { configuration: component.configuration }
+                ? {
+                    configuration: remapDeliverableComponentConfiguration(
+                      componentKey,
+                      component.configuration,
+                      sourceAssessmentTemplateTitlesById,
+                      destinationAssessmentTemplateIdsByTitle
+                    ),
+                  }
                 : {}),
             };
           })
@@ -1378,7 +1472,9 @@ async function migrateRecord(
   actionItemAssigneeEmail?: string | null,
   destinationMembers: DestinationMember[] = [],
   destinationMeetingTypes: DestinationMeetingType[] = [],
-  deliverableClientIdCache: Map<string, string> = new Map()
+  deliverableClientIdCache: Map<string, string> = new Map(),
+  sourceAssessmentTemplateTitlesById: Map<string, string> = new Map(),
+  destinationAssessmentTemplateIdsByTitle: Map<string, string> = new Map()
 ): Promise<{
   newId?: string;
   recordName: string;
@@ -1825,7 +1921,11 @@ async function migrateRecord(
     destinationClient,
     deliverableClientIdCache
   );
-  const createBody = buildDeliverableCreatePayload(record);
+  const createBody = buildDeliverableCreatePayload(
+    record,
+    sourceAssessmentTemplateTitlesById,
+    destinationAssessmentTemplateIdsByTitle
+  );
   if (
     !Array.isArray(createBody.sections) ||
     createBody.sections.length === 0
@@ -2013,6 +2113,8 @@ export async function runTenantMigration({
   let totalFailures = 0;
   let destinationMembers: DestinationMember[] = [];
   let destinationMeetingTypes: DestinationMeetingType[] = [];
+  let sourceAssessmentTemplates: AssessmentTemplateOverview[] = [];
+  let destinationAssessmentTemplates: AssessmentTemplateOverview[] = [];
 
   const sourceDeliverableClientIdCache = new Map<string, string>();
   const destinationDeliverableClientIdCache = new Map<string, string>();
@@ -2040,6 +2142,38 @@ export async function runTenantMigration({
       destinationMeetingTypes = [];
     }
   }
+
+  if (selectedObjects.deliverables) {
+    try {
+      sourceAssessmentTemplates = await fetchAssessmentTemplates(sourceApiKey);
+    } catch {
+      sourceAssessmentTemplates = [];
+    }
+
+    try {
+      destinationAssessmentTemplates = await fetchAssessmentTemplates(
+        destinationApiKey
+      );
+    } catch {
+      destinationAssessmentTemplates = [];
+    }
+  }
+
+  const sourceAssessmentTemplateTitlesById = new Map(
+    sourceAssessmentTemplates.map((template) => [template.id, template.title])
+  );
+  const destinationAssessmentTemplateIdsByTitle = new Map(
+    destinationAssessmentTemplates
+      .map((template) => [
+        normalizeTemplateTitle(template.title),
+        template.id,
+      ] as const)
+      .filter(
+        (
+          entry
+        ): entry is readonly [string, string] => typeof entry[0] === "string"
+      )
+  );
 
   for (let clientIndex = 0; clientIndex < mappings.length; clientIndex += 1) {
     const mapping = mappings[clientIndex];
@@ -2113,7 +2247,9 @@ export async function runTenantMigration({
             actionItemAssigneeEmail,
             destinationMembers,
             destinationMeetingTypes,
-            destinationDeliverableClientIdCache
+            destinationDeliverableClientIdCache,
+            sourceAssessmentTemplateTitlesById,
+            destinationAssessmentTemplateIdsByTitle
           );
           progress.objects[type].succeeded += 1;
           totalCreated += 1;
