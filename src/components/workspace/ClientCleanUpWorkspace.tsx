@@ -50,7 +50,10 @@ type Step = 1 | 2 | "running" | "complete";
 
 export function ClientCleanUpWorkspace() {
   const navigate = useNavigate();
-  const apiKey = window.sessionStorage.getItem("scalepad_api_key") || "";
+  const apiKey =
+    window.sessionStorage.getItem("sp_api_key") ||
+    window.sessionStorage.getItem("scalepad_api_key") ||
+    "";
 
   // Step 1 state
   const [clients, setClients] = useState<CleanupClient[]>([]);
