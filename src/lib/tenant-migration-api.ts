@@ -1034,7 +1034,7 @@ async function fetchDestinationMembers(
 
     for (const member of response.data || []) {
       const id = asText(member.id);
-      const email = asText(member.contact_info?.email) || asText(member.email);
+      const email = asText((member.contact_info as Record<string, unknown>)?.email) || asText(member.email);
       if (id && email) {
         results.push({ id, email: email.toLowerCase() });
       }
