@@ -7,6 +7,7 @@ import { OpportunitiesWorkspace } from "@/components/workspace/OpportunitiesWork
 import { InitiativeManagerWorkspace } from "@/components/workspace/InitiativeManagerWorkspace";
 import { GoalManagerWorkspace } from "@/components/workspace/GoalManagerWorkspace";
 import { TenantMigrationWorkspace } from "@/components/workspace/TenantMigrationWorkspace";
+import { ClientCleanUpWorkspace } from "@/components/workspace/ClientCleanUpWorkspace";
 import { AppRatingsComments } from "@/components/marketplace/AppRatingsComments";
 
 import { ArrowLeft } from "lucide-react";
