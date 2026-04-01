@@ -89,6 +89,8 @@ export default function AppDetail() {
           <GoalManagerWorkspace />
         ) : (app.input_schema as any)?.appType === "tenant-migration" ? (
           <TenantMigrationWorkspace />
+        ) : (app.input_schema as any)?.appType === "client-cleanup" ? (
+          <ClientCleanUpWorkspace />
         ) : (app.input_schema as any)?.realApi ? (
           <OpportunitiesWorkspace app={app} />
         ) : (

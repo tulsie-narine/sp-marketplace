@@ -81,4 +81,24 @@ export const SEED_APPS: MarketplaceApp[] = [
     },
     created_at: "2026-03-28T10:00:00Z",
   },
+  {
+    id: "app-011",
+    name: "Client Clean Up",
+    description:
+      "Select clients and permanently delete their Lifecycle Manager data by object type — initiatives, goals, meetings, action items, notes, assessments, contracts, and deliverables.",
+    how_it_works:
+      "Fetches your client list, lets you select which clients and data types to clean, then sequentially deletes each record via the Lifecycle Manager API with real-time progress tracking and error logging.",
+    category: "Utilities",
+    icon: "🧹",
+    status: "active",
+    version: "1.0.0",
+    author: "ScalePad Team",
+    api_endpoint: "/lifecycle-manager/v1/*",
+    input_schema: {
+      realApi: true,
+      appType: "client-cleanup",
+      fields: [],
+    },
+    created_at: "2026-04-01T10:00:00Z",
+  },
 ];
