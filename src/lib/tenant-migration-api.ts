@@ -1993,13 +1993,24 @@ async function migrateRecord(
 
   const sourceDeliverableStatus = normalizeDeliverableStatus(record.status);
   if (sourceDeliverableStatus) {
-    await sleep(DEFAULT_DELAY_MS);
-    await proxyCallWithRetry(
-      destinationApiKey,
-      `/lifecycle-manager/v1/deliverables/${createdId}`,
-      "PATCH",
-      { status: sourceDeliverableStatus }
-    );
+    try {
+      await sleep(DEFAULT_DELAY_MS);
+      await proxyCallWithRetry(
+        destinationApiKey,
+        `/lifecycle-manager/v1/deliverables/${createdId}`,
+        "PATCH",
+        { status: sourceDeliverableStatus }
+      );
+    } catch (error) {
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.deliverables,
+          getRecordName(record, "Migrated Deliverable"),
+          `Deliverable created, but status could not be updated to ${sourceDeliverableStatus}.`
+        )
+      );
+    }
   }
 
   const createdDeliverable = await proxyCallWithRetry<Record<string, any>>(
