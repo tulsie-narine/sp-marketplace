@@ -1081,7 +1081,7 @@ async function findDestinationMemberIdByEmailViaApi(
 
     const match = (response.data || []).find((member) => {
       const memberEmail =
-        asText(member.contact_info?.email) || asText(member.email);
+        asText((member.contact_info as Record<string, unknown>)?.email) || asText(member.email);
       return memberEmail?.trim().toLowerCase() === normalizedEmail;
     });
 
