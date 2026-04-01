@@ -502,9 +502,9 @@ function extractFirstEmail(items: unknown): string | null {
     if (!isRecord(item)) continue;
     const email =
       asText(item.email) ||
-      asText(item.contact_info?.email) ||
-      asText(item.user?.email) ||
-      asText(item.member?.email);
+      asText((item.contact_info as Record<string, unknown>)?.email) ||
+      asText((item.user as Record<string, unknown>)?.email) ||
+      asText((item.member as Record<string, unknown>)?.email);
     if (email) return email;
   }
   return null;
@@ -1034,7 +1034,7 @@ async function fetchDestinationMembers(
 
     for (const member of response.data || []) {
       const id = asText(member.id);
-      const email = asText(member.contact_info?.email) || asText(member.email);
+      const email = asText((member.contact_info as Record<string, unknown>)?.email) || asText(member.email);
       if (id && email) {
         results.push({ id, email: email.toLowerCase() });
       }
@@ -1081,7 +1081,7 @@ async function findDestinationMemberIdByEmailViaApi(
 
     const match = (response.data || []).find((member) => {
       const memberEmail =
-        asText(member.contact_info?.email) || asText(member.email);
+        asText((member.contact_info as Record<string, unknown>)?.email) || asText(member.email);
       return memberEmail?.trim().toLowerCase() === normalizedEmail;
     });
 

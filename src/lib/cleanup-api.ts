@@ -1,0 +1,354 @@
+/**
+ * Client Clean Up API helpers.
+ * All calls proxied through the scalepad-proxy edge function.
+ */
+
+import { supabase } from "@/integrations/supabase/client";
+
+const DELAY_MS = 120;
+
+// ---- Types ----
+
+export interface CleanupClient {
+  id: string;
+  name: string;
+  lifecycle: string;
+  num_hardware_assets: number;
+}
+
+export type SectionType =
+  | "initiatives"
+  | "goals"
+  | "meetings"
+  | "actionItems"
+  | "notes"
+  | "assessments"
+  | "contracts"
+  | "deliverables";
+
+export type SectionStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "partial"
+  | "failed"
+  | "skipped";
+
+export interface SectionProgress {
+  type: SectionType;
+  label: string;
+  status: SectionStatus;
+  deleted: number;
+  total: number;
+}
+
+export interface ClientProgress {
+  clientId: string;
+  clientName: string;
+  sections: SectionProgress[];
+}
+
+export interface CleanupError {
+  clientName: string;
+  section: string;
+  recordId: string;
+  errorCode: string;
+  errorDetail: string;
+}
+
+// ---- Internal helpers ----
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function proxyCall(
+  apiKey: string,
+  endpoint: string,
+  method = "GET",
+  body?: Record<string, unknown>
+) {
+  const { data: json, error: fnError } = await supabase.functions.invoke(
+    "scalepad-proxy",
+    {
+      body: { endpoint, method, body },
+      headers: { "x-scalepad-api-key": apiKey },
+    }
+  );
+
+  if (fnError) throw new Error(fnError.message || "Edge function error");
+
+  if (json?.upstream_status && json.upstream_status >= 400) {
+    const detail =
+      json.errors?.[0]?.detail || json.error || `API returned ${json.upstream_status}`;
+    throw new Error(`${json.upstream_status}: ${detail}`);
+  }
+
+  if (json?.error) throw new Error(json.error);
+  return json;
+}
+
+// ---- Fetch all clients ----
+
+export async function fetchAllClients(apiKey: string): Promise<CleanupClient[]> {
+  const all: CleanupClient[] = [];
+  let cursor: string | null = null;
+
+  do {
+    const params = new URLSearchParams({ page_size: "200", sort: "name" });
+    if (cursor) params.set("cursor", cursor);
+
+    const json = await proxyCall(apiKey, `/core/v1/clients?${params.toString()}`);
+    const items = json.data || [];
+    for (const c of items) {
+      all.push({
+        id: c.id,
+        name: c.name || "Unnamed",
+        lifecycle: c.lifecycle || "—",
+        num_hardware_assets: c.num_hardware_assets ?? 0,
+      });
+    }
+    cursor = json.next_cursor || null;
+    await sleep(DELAY_MS);
+  } while (cursor);
+
+  return all;
+}
+
+// ---- Section config ----
+
+interface SectionConfig {
+  type: SectionType;
+  label: string;
+  listEndpoint: (clientId: string) => string;
+  deleteEndpoint: (recordId: string) => string;
+  paginated: boolean;
+}
+
+const SECTIONS: SectionConfig[] = [
+  {
+    type: "initiatives",
+    label: "Initiatives",
+    listEndpoint: (cid) =>
+      `/lifecycle-manager/v1/initiatives?filter[client.id]=${cid}&page_size=100`,
+    deleteEndpoint: (id) => `/lifecycle-manager/v1/initiatives/${id}`,
+    paginated: true,
+  },
+  {
+    type: "goals",
+    label: "Goals",
+    listEndpoint: (cid) =>
+      `/lifecycle-manager/v1/goals?filter[client.id]=${cid}&page_size=100`,
+    deleteEndpoint: (id) => `/lifecycle-manager/v1/goals/${id}`,
+    paginated: true,
+  },
+  {
+    type: "meetings",
+    label: "Meetings",
+    listEndpoint: (cid) =>
+      `/lifecycle-manager/v1/meetings?filter[client.id]=${cid}&page_size=100`,
+    deleteEndpoint: (id) => `/lifecycle-manager/v1/meetings/${id}`,
+    paginated: true,
+  },
+  {
+    type: "actionItems",
+    label: "Action Items",
+    listEndpoint: (cid) =>
+      `/lifecycle-manager/v1/action-items?filter[client.id]=${cid}&page_size=100`,
+    deleteEndpoint: (id) => `/lifecycle-manager/v1/action-items/${id}`,
+    paginated: true,
+  },
+  {
+    type: "notes",
+    label: "Notes",
+    listEndpoint: (cid) =>
+      `/lifecycle-manager/v1/notes?filter[client.id]=${cid}&page_size=100`,
+    deleteEndpoint: (id) => `/lifecycle-manager/v1/notes/${id}`,
+    paginated: true,
+  },
+  {
+    type: "assessments",
+    label: "Assessments",
+    listEndpoint: (cid) =>
+      `/lifecycle-manager/v1/assessments?filter[client.id]=${cid}&page_size=100`,
+    deleteEndpoint: (id) => `/lifecycle-manager/v1/assessments/${id}`,
+    paginated: true,
+  },
+  {
+    type: "contracts",
+    label: "Contracts",
+    listEndpoint: (cid) =>
+      `/lifecycle-manager/v1/contracts?filter[client.id]=${cid}&page_size=100`,
+    deleteEndpoint: (id) => `/lifecycle-manager/v1/contracts/${id}`,
+    paginated: true,
+  },
+  {
+    type: "deliverables",
+    label: "Deliverables",
+    listEndpoint: (cid) =>
+      `/lifecycle-manager/v1/clients/${cid}/deliverables`,
+    deleteEndpoint: (id) => `/lifecycle-manager/v1/deliverables/${id}`,
+    paginated: false,
+  },
+];
+
+export function getSectionConfigs() {
+  return SECTIONS;
+}
+
+// ---- Fetch record IDs for a section ----
+
+async function fetchRecordIds(
+  apiKey: string,
+  config: SectionConfig,
+  clientId: string
+): Promise<string[]> {
+  const ids: string[] = [];
+
+  if (!config.paginated) {
+    const json = await proxyCall(apiKey, config.listEndpoint(clientId));
+    for (const item of json.data || []) {
+      if (item.id) ids.push(item.id);
+    }
+    return ids;
+  }
+
+  let cursor: string | null = null;
+  do {
+    let url = config.listEndpoint(clientId);
+    if (cursor) url += `&cursor=${cursor}`;
+    const json = await proxyCall(apiKey, url);
+    for (const item of json.data || []) {
+      if (item.id) ids.push(item.id);
+    }
+    cursor = json.next_cursor || null;
+    if (cursor) await sleep(DELAY_MS);
+  } while (cursor);
+
+  return ids;
+}
+
+// ---- Delete a single record ----
+
+async function deleteRecord(
+  apiKey: string,
+  config: SectionConfig,
+  recordId: string
+): Promise<{ success: boolean; errorCode?: string; errorDetail?: string }> {
+  try {
+    const json = await proxyCall(
+      apiKey,
+      config.deleteEndpoint(recordId),
+      "DELETE"
+    );
+    // 204 comes back as upstream_status=204
+    if (json?.upstream_status === 429) {
+      const retryAfter = json.retry_after || 5;
+      await sleep(retryAfter * 1000);
+      // retry once
+      const retry = await proxyCall(
+        apiKey,
+        config.deleteEndpoint(recordId),
+        "DELETE"
+      );
+      if (retry?.upstream_status && retry.upstream_status >= 400) {
+        return {
+          success: false,
+          errorCode: String(retry.upstream_status),
+          errorDetail: retry.errors?.[0]?.detail || retry.error || "Delete failed on retry",
+        };
+      }
+    }
+    return { success: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    const code = msg.match(/^(\d+):/)?.[1] || "500";
+    return { success: false, errorCode: code, errorDetail: msg };
+  }
+}
+
+// ---- Run cleanup for one client ----
+
+export type ProgressCallback = (progress: ClientProgress) => void;
+export type ErrorCallback = (error: CleanupError) => void;
+
+export async function runClientCleanup(
+  apiKey: string,
+  client: CleanupClient,
+  selectedSections: Record<SectionType, boolean>,
+  onProgress: ProgressCallback,
+  onError: ErrorCallback
+): Promise<ClientProgress> {
+  const progress: ClientProgress = {
+    clientId: client.id,
+    clientName: client.name,
+    sections: SECTIONS.map((s) => ({
+      type: s.type,
+      label: s.label,
+      status: selectedSections[s.type] ? "pending" : "skipped",
+      deleted: 0,
+      total: 0,
+    })),
+  };
+
+  onProgress({ ...progress, sections: [...progress.sections] });
+
+  for (let i = 0; i < SECTIONS.length; i++) {
+    const config = SECTIONS[i];
+    const sp = progress.sections[i];
+
+    if (!selectedSections[config.type]) continue;
+
+    sp.status = "running";
+    onProgress({ ...progress, sections: progress.sections.map((s) => ({ ...s })) });
+
+    // Fetch IDs
+    let ids: string[];
+    try {
+      ids = await fetchRecordIds(apiKey, config, client.id);
+    } catch (err) {
+      sp.status = "failed";
+      sp.total = 0;
+      const msg = err instanceof Error ? err.message : "Fetch failed";
+      onError({
+        clientName: client.name,
+        section: config.label,
+        recordId: "—",
+        errorCode: "FETCH",
+        errorDetail: `Fetch failed for ${config.label} — ${msg}`,
+      });
+      onProgress({ ...progress, sections: progress.sections.map((s) => ({ ...s })) });
+      continue;
+    }
+
+    sp.total = ids.length;
+    if (ids.length === 0) {
+      sp.status = "success";
+      onProgress({ ...progress, sections: progress.sections.map((s) => ({ ...s })) });
+      continue;
+    }
+
+    // Delete each
+    let failures = 0;
+    for (const recordId of ids) {
+      await sleep(DELAY_MS);
+      const result = await deleteRecord(apiKey, config, recordId);
+      if (result.success) {
+        sp.deleted++;
+      } else {
+        failures++;
+        onError({
+          clientName: client.name,
+          section: config.label,
+          recordId,
+          errorCode: result.errorCode || "ERR",
+          errorDetail: result.errorDetail || "Delete failed",
+        });
+      }
+      onProgress({ ...progress, sections: progress.sections.map((s) => ({ ...s })) });
+    }
+
+    sp.status = failures === 0 ? "success" : sp.deleted > 0 ? "partial" : "failed";
+    onProgress({ ...progress, sections: progress.sections.map((s) => ({ ...s })) });
+  }
+
+  return progress;
+}
