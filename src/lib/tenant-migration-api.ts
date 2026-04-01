@@ -690,6 +690,14 @@ function buildContractCreatePayload(record: Record<string, any>) {
   };
 }
 
+function normalizeDeliverableStatus(value: unknown): "Draft" | "Published" | null {
+  const status = asText(value);
+  if (status === "Draft" || status === "Published") {
+    return status;
+  }
+  return null;
+}
+
 function collectShortIdCandidates(
   value: unknown,
   results: Set<string>,
@@ -1981,6 +1989,17 @@ async function migrateRecord(
   const createdId = asText(created.deliverable?.id);
   if (!createdId) {
     throw new Error("Deliverable create did not return a deliverable id.");
+  }
+
+  const sourceDeliverableStatus = normalizeDeliverableStatus(record.status);
+  if (sourceDeliverableStatus) {
+    await sleep(DEFAULT_DELAY_MS);
+    await proxyCallWithRetry(
+      destinationApiKey,
+      `/lifecycle-manager/v1/deliverables/${createdId}`,
+      "PATCH",
+      { status: sourceDeliverableStatus }
+    );
   }
 
   const createdDeliverable = await proxyCallWithRetry<Record<string, any>>(
