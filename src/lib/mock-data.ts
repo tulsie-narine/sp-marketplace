@@ -101,4 +101,24 @@ export const SEED_APPS: MarketplaceApp[] = [
     },
     created_at: "2026-04-01T10:00:00Z",
   },
+  {
+    id: "app-012",
+    name: "Risk-to-Roadmap Builder",
+    description:
+      "Triage client risk posture across your portfolio, convert high-priority risks into ControlMap action plans, and promote them to Lifecycle Manager initiatives for QBR-ready strategic roadmaps.",
+    how_it_works:
+      "Fetches client health and risk summary data from the ControlMap API, displays a portfolio-level risk overview with drill-down into individual client risks, and provides a planning drawer to create action items or promote risks to Lifecycle Manager initiatives with full 6-step orchestration.",
+    category: "Reporting",
+    icon: "🎯",
+    status: "active",
+    version: "1.0.0",
+    author: "ScalePad Team",
+    api_endpoint: "/controlmap/v1/*",
+    input_schema: {
+      realApi: true,
+      appType: "risk-roadmap",
+      fields: [],
+    },
+    created_at: "2026-04-02T10:00:00Z",
+  },
 ];
