@@ -95,7 +95,10 @@ function GapBar({ current, target, max = 25 }: { current: number; target: number
 // Main component
 // =====================
 export function RiskRoadmapWorkspace() {
-  const apiKey = window.sessionStorage.getItem("scalepad_api_key") || "";
+  const apiKey =
+    window.sessionStorage.getItem("sp_api_key") ||
+    window.sessionStorage.getItem("scalepad_api_key") ||
+    "";
 
   // --- Portfolio state ---
   const [portfolio, setPortfolio] = useState<PortfolioClient[]>([]);
