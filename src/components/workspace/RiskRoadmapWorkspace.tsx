@@ -25,6 +25,8 @@ import { format } from "date-fns";
 import {
   ArrowLeft,
   ArrowRight,
+  ChevronDown,
+  ChevronRight,
   RefreshCw,
   Loader2,
   TrendingUp,
@@ -54,6 +56,12 @@ import {
 } from "@/lib/risk-roadmap-api";
 
 const PAGE_SIZE = 10;
+
+interface RiskWorkTracking {
+  actionItems: number;
+  initiatives: number;
+  treatmentPlanDetails: string[];
+}
 
 // --- Risk level badge ---
 function RiskBadge({ level }: { level: string }) {
@@ -110,6 +118,7 @@ export function RiskRoadmapWorkspace() {
   const [selectedClient, setSelectedClient] = useState<PortfolioClient | null>(null);
   const [clientRisks, setClientRisks] = useState<ClientRisk[]>([]);
   const [clientActionItems, setClientActionItems] = useState<ActionItem[]>([]);
+  const [riskWorkTracking, setRiskWorkTracking] = useState<Record<number, RiskWorkTracking>>({});
   const [risksLoading, setRisksLoading] = useState(false);
   const [risksError, setRisksError] = useState<string | null>(null);
 
@@ -189,6 +198,7 @@ export function RiskRoadmapWorkspace() {
     setActiveScreen("workspace");
     setRisksLoading(true);
     setRisksError(null);
+    setRiskWorkTracking({});
     setSelectedRiskIds(new Set());
     setRiskPage(0);
     try {
@@ -252,6 +262,28 @@ export function RiskRoadmapWorkspace() {
     if (selected.length === 0) return;
     openDrawerForRisks(selected);
   };
+
+  const trackRiskWork = useCallback(
+    (risks: ClientRisk[], kind: "actionItem" | "initiative", detail: string) => {
+      setRiskWorkTracking((prev) => {
+        const next = { ...prev };
+        for (const risk of risks) {
+          const current = next[risk.id] || {
+            actionItems: 0,
+            initiatives: 0,
+            treatmentPlanDetails: [],
+          };
+          next[risk.id] = {
+            actionItems: current.actionItems + (kind === "actionItem" ? 1 : 0),
+            initiatives: current.initiatives + (kind === "initiative" ? 1 : 0),
+            treatmentPlanDetails: [detail, ...current.treatmentPlanDetails].slice(0, 6),
+          };
+        }
+        return next;
+      });
+    },
+    []
+  );
 
   // =====================
   // RENDER
@@ -332,6 +364,8 @@ export function RiskRoadmapWorkspace() {
               totalPages={riskPages}
               onPageChange={setRiskPage}
               heatmapData={heatmapData}
+              clientActionItems={clientActionItems}
+              riskWorkTracking={riskWorkTracking}
             />
           )}
         </TabsContent>
@@ -347,13 +381,15 @@ export function RiskRoadmapWorkspace() {
         apiKey={apiKey}
         tab={drawerTab}
         onTabChange={setDrawerTab}
+        onActionItemCreated={(risks, detail) => trackRiskWork(risks, "actionItem", detail)}
+        onInitiativeCreated={(risks, detail) => trackRiskWork(risks, "initiative", detail)}
       />
     </div>
   );
 }
 
 // ==============================================
-// SCREEN 1 — PORTFOLIO
+// SCREEN 1 â€” PORTFOLIO
 // ==============================================
 
 interface PortfolioScreenProps {
@@ -379,7 +415,7 @@ function PortfolioScreen({
     return (
       <div className="flex items-center justify-center py-20">
         <Loader2 className="w-6 h-6 animate-spin text-primary mr-3" />
-        <span className="text-sm text-muted-foreground">Loading portfolio data…</span>
+        <span className="text-sm text-muted-foreground">Loading portfolio dataâ€¦</span>
       </div>
     );
   }
@@ -397,7 +433,7 @@ function PortfolioScreen({
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-heading font-bold">Portfolio Risk Overview</h2>
-        <p className="text-xs text-muted-foreground">{totalClients} clients · sorted by risk severity</p>
+        <p className="text-xs text-muted-foreground">{totalClients} clients Â· sorted by risk severity</p>
       </div>
 
       {/* Stat cards */}
@@ -410,7 +446,7 @@ function PortfolioScreen({
 
       {/* Search */}
       <Input
-        placeholder="Search clients…"
+        placeholder="Search clientsâ€¦"
         value={search}
         onChange={(e) => onSearchChange(e.target.value)}
         className="max-w-xs bg-[#111520] border-border"
@@ -448,7 +484,7 @@ function PortfolioScreen({
                 <td className="px-3 py-2.5 text-center"><TrendIcon value={c.trend_30} /></td>
                 <td className="px-3 py-2.5 text-center font-mono text-xs">{c.action_item_pct}%</td>
                 <td className="px-3 py-2.5 text-right">
-                  <span className="text-xs text-primary hover:underline">View →</span>
+                  <span className="text-xs text-primary hover:underline">View â†’</span>
                 </td>
               </tr>
             ))}
@@ -464,8 +500,8 @@ function PortfolioScreen({
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>Page {page + 1} of {totalPages}</span>
           <div className="flex gap-1">
-            <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => onPageChange(page - 1)}>← Prev</Button>
-            <Button size="sm" variant="ghost" disabled={page >= totalPages - 1} onClick={() => onPageChange(page + 1)}>Next →</Button>
+            <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => onPageChange(page - 1)}>â† Prev</Button>
+            <Button size="sm" variant="ghost" disabled={page >= totalPages - 1} onClick={() => onPageChange(page + 1)}>Next â†’</Button>
           </div>
         </div>
       )}
@@ -483,13 +519,15 @@ function StatCard({ label, value, color }: { label: string; value: number; color
 }
 
 // ==============================================
-// SCREEN 2 — CLIENT WORKSPACE
+// SCREEN 2 â€” CLIENT WORKSPACE
 // ==============================================
 
 interface WorkspaceScreenProps {
   client: PortfolioClient;
   risks: ClientRisk[];
   allFilteredRisks: ClientRisk[];
+  clientActionItems: ActionItem[];
+  riskWorkTracking: Record<number, RiskWorkTracking>;
   loading: boolean;
   error: string | null;
   onBack: () => void;
@@ -515,17 +553,19 @@ interface WorkspaceScreenProps {
 }
 
 function WorkspaceScreen({
-  client, risks, allFilteredRisks, loading, error, onBack,
+  client, risks, allFilteredRisks, clientActionItems, riskWorkTracking, loading, error, onBack,
   statusFilter, onStatusFilter, treatmentFilter, onTreatmentFilter,
   categoryFilter, onCategoryFilter, categories, sortBy, onSortBy,
   viewMode, onViewMode, selectedIds, onToggleSelect, onPlanRisk,
   onBulkBundle, page, totalPages, onPageChange, heatmapData,
 }: WorkspaceScreenProps) {
+  const [expandedRiskIds, setExpandedRiskIds] = useState<Set<number>>(new Set());
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
         <Loader2 className="w-6 h-6 animate-spin text-primary mr-3" />
-        <span className="text-sm text-muted-foreground">Loading risks…</span>
+        <span className="text-sm text-muted-foreground">Loading risks...</span>
       </div>
     );
   }
@@ -541,9 +581,37 @@ function WorkspaceScreen({
   const statuses = ["All", "Not Assessed", "Assessment in progress", "Needs Remediation", "Assessed", "Remediated", "Closed"];
   const treatments = ["All", "Avoid", "Reduce", "Transfer", "Share", "Accept"];
 
+  const getExistingActionItems = (risk: ClientRisk) => {
+    const code = risk.code.toLowerCase();
+    const name = risk.name.toLowerCase();
+    return clientActionItems.filter((item) => {
+      const text = item.weakness_name.toLowerCase();
+      return text.includes(code) || text.includes(name);
+    });
+  };
+
+  const getTrackerSummary = (risk: ClientRisk) => {
+    const existingActionItems = getExistingActionItems(risk);
+    const tracked = riskWorkTracking[risk.id];
+    return {
+      existingActionItems,
+      actionItemsCount: existingActionItems.length + (tracked?.actionItems || 0),
+      initiativesCount: tracked?.initiatives || 0,
+      totalLinkedCount: existingActionItems.length + (tracked?.actionItems || 0) + (tracked?.initiatives || 0),
+      treatmentPlanDetails: tracked?.treatmentPlanDetails || [],
+    };
+  };
+
+  const toggleExpanded = (riskId: number) => {
+    setExpandedRiskIds((prev) => {
+      const next = new Set(prev);
+      next.has(riskId) ? next.delete(riskId) : next.add(riskId);
+      return next;
+    });
+  };
+
   return (
     <div className="space-y-4">
-      {/* Header */}
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft className="w-4 h-4 mr-1" />All Clients
@@ -555,7 +623,6 @@ function WorkspaceScreen({
         </div>
       </div>
 
-      {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
         <FilterSelect label="Status" value={statusFilter} options={statuses} onChange={onStatusFilter} />
         <FilterSelect label="Treatment" value={treatmentFilter} options={treatments} onChange={onTreatmentFilter} />
@@ -572,11 +639,10 @@ function WorkspaceScreen({
         </div>
       </div>
 
-      {/* Bulk action */}
       {selectedIds.size >= 2 && (
         <div className="bg-primary/10 border border-primary/20 rounded-lg px-4 py-2 flex items-center justify-between">
           <span className="text-sm">{selectedIds.size} risks selected</span>
-          <Button size="sm" onClick={onBulkBundle}>Bundle into Initiative →</Button>
+          <Button size="sm" onClick={onBulkBundle}>Bundle into Initiative {"->"}</Button>
         </div>
       )}
 
@@ -589,48 +655,127 @@ function WorkspaceScreen({
                   <th className="px-3 py-2 w-8"></th>
                   <th className="text-left px-3 py-2 font-medium text-muted-foreground">Code</th>
                   <th className="text-left px-3 py-2 font-medium text-muted-foreground">Risk Name</th>
-                  <th className="text-left px-3 py-2 font-medium text-muted-foreground">Category</th>
                   <th className="text-left px-3 py-2 font-medium text-muted-foreground">Status</th>
                   <th className="text-left px-3 py-2 font-medium text-muted-foreground">Owner</th>
                   <th className="text-center px-3 py-2 font-medium text-muted-foreground">Current</th>
-                  <th className="text-center px-3 py-2 font-medium text-muted-foreground">Target</th>
-                  <th className="text-center px-3 py-2 font-medium text-muted-foreground">Gap</th>
                   <th className="text-left px-3 py-2 font-medium text-muted-foreground">Treatment</th>
-                  <th className="px-3 py-2"></th>
+                  <th className="text-center px-3 py-2 font-medium text-muted-foreground">Linked</th>
+                  <th className="px-3 py-2 w-10"></th>
                 </tr>
               </thead>
               <tbody>
-                {risks.map((r) => (
-                  <tr key={r.id} className="border-b border-border hover:bg-[#181d2e] transition-colors">
-                    <td className="px-3 py-2">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(r.id)}
-                        onChange={() => onToggleSelect(r.id)}
-                        className="rounded border-border"
-                      />
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{r.code}</td>
-                    <td className="px-3 py-2 font-medium max-w-[200px] truncate">{r.name}</td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground">{r.risk_category}</td>
-                    <td className="px-3 py-2 text-xs">{r.status}</td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground">{r.owner?.name || "—"}</td>
-                    <td className="px-3 py-2 text-center">
-                      <span className="text-xs font-mono">{r.current_risk_score}</span>
-                      <RiskBadge level={r.current_risk_label} />
-                    </td>
-                    <td className="px-3 py-2 text-center font-mono text-xs">{r.target_risk_score}</td>
-                    <td className="px-3 py-2"><GapBar current={r.current_risk_score} target={r.target_risk_score} /></td>
-                    <td className="px-3 py-2 text-xs">{r.treatment}</td>
-                    <td className="px-3 py-2 text-right">
-                      <Button size="sm" variant="ghost" className="text-primary text-xs" onClick={() => onPlanRisk(r)}>
-                        Plan →
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
+                {risks.map((r) => {
+                  const expanded = expandedRiskIds.has(r.id);
+                  const tracker = getTrackerSummary(r);
+                  return (
+                    <>
+                      <tr
+                        key={r.id}
+                        className="border-b border-border hover:bg-[#181d2e] transition-colors cursor-pointer"
+                        onClick={() => toggleExpanded(r.id)}
+                      >
+                        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(r.id)}
+                            onChange={() => onToggleSelect(r.id)}
+                            className="rounded border-border"
+                          />
+                        </td>
+                        <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{r.code}</td>
+                        <td className="px-3 py-2 font-medium max-w-[260px] truncate">{r.name}</td>
+                        <td className="px-3 py-2 text-xs">{r.status}</td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">{r.owner?.name || "-"}</td>
+                        <td className="px-3 py-2 text-center">
+                          <div className="flex items-center justify-center gap-2">
+                            <span className="text-xs font-mono">{r.current_risk_score}</span>
+                            <RiskBadge level={r.current_risk_label} />
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-xs">{r.treatment || "-"}</td>
+                        <td className="px-3 py-2 text-center">
+                          <LinkedWorkBadge count={tracker.totalLinkedCount} />
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {expanded ? (
+                            <ChevronDown className="w-4 h-4 text-muted-foreground inline-block" />
+                          ) : (
+                            <ChevronRight className="w-4 h-4 text-muted-foreground inline-block" />
+                          )}
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr className="border-b border-border bg-[#111520]">
+                          <td colSpan={9} className="px-4 py-4">
+                            <div className="grid gap-4 md:grid-cols-2">
+                              <DetailBlock label="Category" value={r.risk_category || "-"} />
+                              <DetailBlock label="Target / Gap" value={`${r.target_risk_score} target • ${r.current_risk_score - r.target_risk_score} gap`} />
+                              <DetailBlock label="Treatment Option" value={r.treatment || "-"} />
+                              <div>
+                                <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">Linked Work</p>
+                                <div className="flex flex-wrap gap-2">
+                                  <StatusPill label="Action Items" value={tracker.actionItemsCount} />
+                                  <StatusPill label="Initiatives" value={tracker.initiativesCount} />
+                                </div>
+                              </div>
+                              <div className="md:col-span-2">
+                                <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">Existing Controls / Action Items</p>
+                                {tracker.existingActionItems.length > 0 ? (
+                                  <div className="space-y-2">
+                                    {tracker.existingActionItems.map((item) => (
+                                      <div key={item.id} className="rounded-md border border-border bg-background px-3 py-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <p className="text-sm">{item.weakness_name}</p>
+                                          <span className="text-[11px] text-muted-foreground">{item.status}</span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-sm text-muted-foreground">No existing action items matched to this risk yet.</p>
+                                )}
+                              </div>
+                              <div className="md:col-span-2">
+                                <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">Treatment Plan Details</p>
+                                <div className="space-y-2 rounded-md border border-border bg-background px-3 py-3">
+                                  {tracker.treatmentPlanDetails.length > 0 ? (
+                                    tracker.treatmentPlanDetails.map((detail, idx) => (
+                                      <p key={`${r.id}-detail-${idx}`} className="text-sm text-foreground">{detail}</p>
+                                    ))
+                                  ) : (
+                                    <p className="text-sm text-muted-foreground">No treatment plan notes recorded yet.</p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="md:col-span-2">
+                                <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">Risk Summary</p>
+                                <div className="space-y-2 rounded-md border border-border bg-background px-3 py-3">
+                                  <p className="text-sm text-foreground">{r.description || "No description provided."}</p>
+                                  <p className="text-sm text-muted-foreground">{r.business_impact || "No business impact provided."}</p>
+                                </div>
+                              </div>
+                              <div className="md:col-span-2 flex justify-end">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="text-primary text-xs"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onPlanRisk(r);
+                                  }}
+                                >
+                                  Plan {"->"}
+                                </Button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  );
+                })}
                 {risks.length === 0 && (
-                  <tr><td colSpan={11} className="px-3 py-8 text-center text-muted-foreground text-sm">No risks found</td></tr>
+                  <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground text-sm">No risks found</td></tr>
                 )}
               </tbody>
             </table>
@@ -639,8 +784,8 @@ function WorkspaceScreen({
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>Page {page + 1} of {totalPages} ({allFilteredRisks.length} risks)</span>
               <div className="flex gap-1">
-                <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => onPageChange(page - 1)}>← Prev</Button>
-                <Button size="sm" variant="ghost" disabled={page >= totalPages - 1} onClick={() => onPageChange(page + 1)}>Next →</Button>
+                <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => onPageChange(page - 1)}>&lt;- Prev</Button>
+                <Button size="sm" variant="ghost" disabled={page >= totalPages - 1} onClick={() => onPageChange(page + 1)}>Next -&gt;</Button>
               </div>
             </div>
           )}
@@ -651,7 +796,6 @@ function WorkspaceScreen({
     </div>
   );
 }
-
 function FilterSelect({ label, value, options, onChange }: {
   label: string;
   value: string;
@@ -707,7 +851,7 @@ function HeatmapView({ data }: { data: Map<string, ClientRisk[]> }) {
                     </PopoverTrigger>
                     {count > 0 && (
                       <PopoverContent className="w-48 p-2" side="top">
-                        <p className="text-xs font-medium mb-1">L{x} × I{y} ({count} risks)</p>
+                        <p className="text-xs font-medium mb-1">L{x} Ã— I{y} ({count} risks)</p>
                         {risks.slice(0, 5).map((r) => (
                           <p key={r.id} className="text-xs text-muted-foreground truncate">{r.code}: {r.name}</p>
                         ))}
@@ -731,8 +875,38 @@ function HeatmapView({ data }: { data: Map<string, ClientRisk[]> }) {
   );
 }
 
+function LinkedWorkBadge({ count }: { count: number }) {
+  return (
+    <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${
+      count > 0 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+    }`}>
+      {count}
+    </span>
+  );
+}
+
+function DetailBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">{label}</p>
+      <p className="text-sm text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function StatusPill({ label, value }: { label: string; value: number }) {
+  return (
+    <span className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1 text-xs text-foreground">
+      <span>{label}</span>
+      <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/15 px-1.5 text-[11px] font-semibold text-primary">
+        {value}
+      </span>
+    </span>
+  );
+}
+
 // ==============================================
-// SCREEN 3 — PLANNING DRAWER
+// SCREEN 3 â€” PLANNING DRAWER
 // ==============================================
 
 interface PlanningDrawerProps {
@@ -744,9 +918,11 @@ interface PlanningDrawerProps {
   apiKey: string;
   tab: "actionItem" | "initiative";
   onTabChange: (t: "actionItem" | "initiative") => void;
+  onActionItemCreated: (risks: ClientRisk[], detail: string) => void;
+  onInitiativeCreated: (risks: ClientRisk[], detail: string) => void;
 }
 
-function PlanningDrawer({ open, onClose, risks, clientId, clientTenantId, apiKey, tab, onTabChange }: PlanningDrawerProps) {
+function PlanningDrawer({ open, onClose, risks, clientId, clientTenantId, apiKey, tab, onTabChange, onActionItemCreated, onInitiativeCreated }: PlanningDrawerProps) {
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent side="right" className="w-full sm:w-[50vw] sm:max-w-[50vw] overflow-y-auto bg-background border-l border-border p-0">
@@ -771,7 +947,7 @@ function PlanningDrawer({ open, onClose, risks, clientId, clientTenantId, apiKey
             </TabsList>
 
             <TabsContent value="actionItem">
-              <ActionItemForm risks={risks} clientId={clientId} apiKey={apiKey} />
+              <ActionItemForm risks={risks} clientId={clientId} apiKey={apiKey} onCreated={onActionItemCreated} />
             </TabsContent>
             <TabsContent value="initiative">
               <InitiativePromoteForm
@@ -779,6 +955,7 @@ function PlanningDrawer({ open, onClose, risks, clientId, clientTenantId, apiKey
                 clientId={clientId}
                 clientTenantId={clientTenantId}
                 apiKey={apiKey}
+                onCreated={onInitiativeCreated}
               />
             </TabsContent>
           </Tabs>
@@ -790,7 +967,7 @@ function PlanningDrawer({ open, onClose, risks, clientId, clientTenantId, apiKey
 
 // --- ACTION ITEM FORM ---
 
-function ActionItemForm({ risks, clientId, apiKey }: { risks: ClientRisk[]; clientId: string; apiKey: string }) {
+function ActionItemForm({ risks, clientId, apiKey, onCreated }: { risks: ClientRisk[]; clientId: string; apiKey: string; onCreated: (risks: ClientRisk[], detail: string) => void }) {
   const primary = risks[0];
   const gap = primary ? primary.current_risk_score - primary.target_risk_score : 0;
 
@@ -832,14 +1009,16 @@ function ActionItemForm({ risks, clientId, apiKey }: { risks: ClientRisk[]; clie
     }
     setSubmitting(true);
     try {
-      await createActionItem(apiKey, clientId, {
+      const created = await createActionItem(apiKey, clientId, {
         ...form,
         efforts_in_hours: form.efforts_in_hours || undefined,
         cost: form.cost || undefined,
         planned_start_date: startDate ? format(startDate, "yyyy-MM-dd") : undefined,
         planned_end_date: endDate ? format(endDate, "yyyy-MM-dd") : undefined,
       });
-      toast.success("Action item created");
+      const actionLabel = created?.code || created?.id || "new action item";
+      onCreated(risks, `Action item ${actionLabel} created by vCISO on ${new Date().toLocaleDateString()}.`);
+      toast.success(created?.code ? `Action item created (${created.code})` : "Action item created");
     } catch (e: any) {
       toast.error(e.message || "Failed to create action item");
     } finally {
@@ -920,7 +1099,7 @@ function ActionItemForm({ risks, clientId, apiKey }: { risks: ClientRisk[]; clie
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <FieldLabel label="Effort (hours, 0–8)">
+          <FieldLabel label="Effort (hours, 0â€“8)">
             <Input type="number" min={0} max={8} value={form.efforts_in_hours} onChange={(e) => set("efforts_in_hours", Number(e.target.value))} className="bg-[#111520]" />
           </FieldLabel>
           <FieldLabel label="Cost">
@@ -957,11 +1136,13 @@ function InitiativePromoteForm({
   clientId,
   clientTenantId,
   apiKey,
+  onCreated,
 }: {
   risks: ClientRisk[];
   clientId: string;
   clientTenantId: string;
   apiKey: string;
+  onCreated: (risks: ClientRisk[], detail: string) => void;
 }) {
   const primary = risks[0];
   const now = new Date();
@@ -980,7 +1161,7 @@ function InitiativePromoteForm({
   };
 
   const [name, setName] = useState(risks.length === 1 ? primary?.name || "" : risks.map((r) => r.name).join(" + "));
-  const [summary, setSummary] = useState(risks.map((r) => [r.description, r.business_impact].filter(Boolean).join(" — ")).join("\n\n"));
+  const [summary, setSummary] = useState(risks.map((r) => [r.description, r.business_impact].filter(Boolean).join(" â€” ")).join("\n\n"));
   const [status, setStatus] = useState("Proposed");
   const [priority, setPriority] = useState(mapPriority(primary?.current_risk_label || ""));
   const [year, setYear] = useState(defaultYear);
@@ -1028,6 +1209,7 @@ function InitiativePromoteForm({
         }
       );
       setDeployed(true);
+      onCreated(risks, `Lifecycle Manager initiative created by vCISO on ${new Date().toLocaleDateString()} to address this risk.`);
       toast.success("Initiative created in Lifecycle Manager");
     } catch (e: any) {
       toast.error(e.message || "Failed to create initiative");
@@ -1050,12 +1232,12 @@ function InitiativePromoteForm({
               {s.status === "success" && <CheckCircle2 className="w-4 h-4 text-[#22c55e]" />}
               {s.status === "error" && <XCircle className="w-4 h-4 text-[#ef4444]" />}
               <span className={s.status === "error" ? "text-[#ef4444]" : ""}>{s.name}</span>
-              {s.error && <span className="text-xs text-[#ef4444]">— {s.error}</span>}
+              {s.error && <span className="text-xs text-[#ef4444]">â€” {s.error}</span>}
             </div>
           ))}
           {deployed && (
             <div className="mt-3 p-3 bg-[#22c55e]/10 border border-[#22c55e]/20 rounded-lg text-sm">
-              ✓ Initiative created.{" "}
+              âœ“ Initiative created.{" "}
               {roadmapUrl ? (
                 <a
                   href={roadmapUrl}
@@ -1063,10 +1245,10 @@ function InitiativePromoteForm({
                   rel="noreferrer"
                   className="text-primary hover:underline"
                 >
-                  View in ScalePad →
+                  View in ScalePad â†’
                 </a>
               ) : (
-                <span className="text-muted-foreground">View in ScalePad →</span>
+                <span className="text-muted-foreground">View in ScalePad â†’</span>
               )}
             </div>
           )}
