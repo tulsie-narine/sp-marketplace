@@ -165,8 +165,8 @@ export async function fetchClientRisks(apiKey: string, clientId: string): Promis
     if (cursor) params.set("cursor", cursor);
 
     const json = await proxyCall(apiKey, `/controlmap/v1/clients/${clientId}/risks?${params}`);
-    all.push(...(json.data || []));
-    cursor = json.next_cursor || null;
+    all.push(...(json.risks?.data || []));
+    cursor = json.risks?.next_cursor || null;
     if (cursor) await delay(DELAY_MS);
   } while (cursor);
 
@@ -182,8 +182,8 @@ export async function fetchClientActionItems(apiKey: string, clientId: string): 
     if (cursor) params.set("cursor", cursor);
 
     const json = await proxyCall(apiKey, `/controlmap/v1/clients/${clientId}/action-items?${params}`);
-    all.push(...(json.data || []));
-    cursor = json.next_cursor || null;
+    all.push(...(json.action_items?.data || []));
+    cursor = json.action_items?.next_cursor || null;
     if (cursor) await delay(DELAY_MS);
   } while (cursor);
 
