@@ -2196,11 +2196,23 @@ async function migrateRecord(
   const sourceDeliverableStatus = normalizeDeliverableStatus(record.status);
   if (sourceDeliverableStatus) {
     try {
+      await sleep(600);
+      await proxyCallWithRetry(
+        destinationApiKey,
+        `/lifecycle-manager/v1/deliverables/${createdId}`
+      );
       await sleep(DEFAULT_DELAY_MS);
       const listedDeliverableId = await resolveListedDeliverableId(
         destinationApiKey,
         deliverableClientId,
         createdId,
+        getRecordName(record, "Migrated Deliverable")
+      );
+      await sleep(DEFAULT_DELAY_MS);
+      await resolveListedDeliverableId(
+        destinationApiKey,
+        deliverableClientId,
+        listedDeliverableId,
         getRecordName(record, "Migrated Deliverable")
       );
       await sleep(DEFAULT_DELAY_MS);
