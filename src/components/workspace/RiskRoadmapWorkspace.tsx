@@ -343,6 +343,7 @@ export function RiskRoadmapWorkspace() {
         onClose={() => setDrawerOpen(false)}
         risks={drawerRisks}
         clientId={selectedClient?.id || ""}
+        clientTenantId={selectedClient?.tenant_id || ""}
         apiKey={apiKey}
         tab={drawerTab}
         onTabChange={setDrawerTab}
@@ -739,12 +740,13 @@ interface PlanningDrawerProps {
   onClose: () => void;
   risks: ClientRisk[];
   clientId: string;
+  clientTenantId: string;
   apiKey: string;
   tab: "actionItem" | "initiative";
   onTabChange: (t: "actionItem" | "initiative") => void;
 }
 
-function PlanningDrawer({ open, onClose, risks, clientId, apiKey, tab, onTabChange }: PlanningDrawerProps) {
+function PlanningDrawer({ open, onClose, risks, clientId, clientTenantId, apiKey, tab, onTabChange }: PlanningDrawerProps) {
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent side="right" className="w-full sm:w-[50vw] sm:max-w-[50vw] overflow-y-auto bg-background border-l border-border p-0">
@@ -772,7 +774,12 @@ function PlanningDrawer({ open, onClose, risks, clientId, apiKey, tab, onTabChan
               <ActionItemForm risks={risks} clientId={clientId} apiKey={apiKey} />
             </TabsContent>
             <TabsContent value="initiative">
-              <InitiativePromoteForm risks={risks} clientId={clientId} apiKey={apiKey} />
+              <InitiativePromoteForm
+                risks={risks}
+                clientId={clientId}
+                clientTenantId={clientTenantId}
+                apiKey={apiKey}
+              />
             </TabsContent>
           </Tabs>
         </div>
@@ -945,12 +952,25 @@ function ActionItemForm({ risks, clientId, apiKey }: { risks: ClientRisk[]; clie
 
 // --- INITIATIVE PROMOTE FORM ---
 
-function InitiativePromoteForm({ risks, clientId, apiKey }: { risks: ClientRisk[]; clientId: string; apiKey: string }) {
+function InitiativePromoteForm({
+  risks,
+  clientId,
+  clientTenantId,
+  apiKey,
+}: {
+  risks: ClientRisk[];
+  clientId: string;
+  clientTenantId: string;
+  apiKey: string;
+}) {
   const primary = risks[0];
   const now = new Date();
   const nextQ = Math.ceil((now.getMonth() + 1) / 3) + 1;
   const defaultYear = nextQ > 4 ? now.getFullYear() + 1 : now.getFullYear();
   const defaultQuarter = nextQ > 4 ? 1 : nextQ;
+  const roadmapUrl = clientTenantId
+    ? `https://app.scalepad.com/clients/${encodeURIComponent(clientTenantId)}/roadmap`
+    : "";
 
   const mapPriority = (label: string) => {
     const l = label?.toLowerCase();
@@ -1035,7 +1055,19 @@ function InitiativePromoteForm({ risks, clientId, apiKey }: { risks: ClientRisk[
           ))}
           {deployed && (
             <div className="mt-3 p-3 bg-[#22c55e]/10 border border-[#22c55e]/20 rounded-lg text-sm">
-              ✓ Initiative created. <span className="text-muted-foreground">View in ScalePad →</span>
+              ✓ Initiative created.{" "}
+              {roadmapUrl ? (
+                <a
+                  href={roadmapUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary hover:underline"
+                >
+                  View in ScalePad →
+                </a>
+              ) : (
+                <span className="text-muted-foreground">View in ScalePad →</span>
+              )}
             </div>
           )}
         </div>
