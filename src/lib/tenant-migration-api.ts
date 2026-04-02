@@ -588,7 +588,7 @@ function buildProseMirrorJson(text: string) {
   });
 }
 
-function buildContractCreatePayload(record: Record<string, any>) {
+export function buildContractCreatePayload(record: Record<string, any>) {
   const nested = isRecord(record.create_payload)
     ? { ...record.create_payload }
     : {};
@@ -1586,7 +1586,9 @@ async function fetchObjectRecords(
     }
   );
 
-  if (type !== "assessments" && type !== "meetings") return list;
+  if (type !== "assessments" && type !== "meetings" && type !== "contracts") {
+    return list;
+  }
 
   const detailed: Record<string, any>[] = [];
   for (const item of list) {
@@ -1599,6 +1601,9 @@ async function fetchObjectRecords(
       (type === "meetings" &&
         isRecord(detailResponse.meeting) &&
         detailResponse.meeting) ||
+      (type === "contracts" &&
+        isRecord(detailResponse.contract) &&
+        detailResponse.contract) ||
       (type === "assessments" &&
         isRecord(detailResponse.assessment) &&
         detailResponse.assessment) ||
