@@ -92,6 +92,8 @@ export default function AppDetail() {
           <TenantMigrationWorkspace />
         ) : (app.input_schema as any)?.appType === "client-cleanup" ? (
           <ClientCleanUpWorkspace />
+        ) : (app.input_schema as any)?.appType === "risk-roadmap" ? (
+          <RiskRoadmapWorkspace />
         ) : (app.input_schema as any)?.realApi ? (
           <OpportunitiesWorkspace app={app} />
         ) : (
