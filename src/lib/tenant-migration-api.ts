@@ -138,6 +138,14 @@ interface DestinationMeetingType {
   label: string;
 }
 
+interface DestinationContact {
+  id: string;
+  email: string | null;
+  clientId: string | null;
+  clientName: string | null;
+  label: string | null;
+}
+
 interface AssessmentTemplateOverview {
   id: string;
   title: string;
@@ -1012,6 +1020,13 @@ function buildMemberEmailFilterValue(email: string) {
     : `eq:${normalizedEmail}`;
 }
 
+function buildEqFilterValue(value: string) {
+  const normalizedValue = value.trim();
+  return /[\s,"]/.test(normalizedValue)
+    ? `eq:"${normalizedValue.replace(/"/g, '\\"')}"`
+    : `eq:${normalizedValue}`;
+}
+
 async function fetchDestinationMembersPage(
   apiKey: string,
   cursor: string | null,
@@ -1136,6 +1151,86 @@ function findDestinationMemberIdByEmail(
   const normalizedEmail = email?.trim().toLowerCase();
   if (!normalizedEmail) return null;
   return members.find((member) => member.email === normalizedEmail)?.id || null;
+}
+
+function extractDestinationContact(
+  contact: Record<string, unknown>
+): DestinationContact | null {
+  const id = asText(contact.id);
+  if (!id) return null;
+
+  const clientRecord = isRecord(contact.client) ? contact.client : null;
+  return {
+    id,
+    email:
+      asText((contact.contact_info as Record<string, unknown>)?.email) ||
+      asText(contact.email) ||
+      null,
+    clientId: asText(clientRecord?.id) || null,
+    clientName: asText(clientRecord?.name) || asText(clientRecord?.label) || null,
+    label: asText(contact.label) || asText(contact.name) || null,
+  };
+}
+
+async function lookupDestinationContactsByEmail(
+  apiKey: string,
+  destinationClient: MigrationClient,
+  email: string
+): Promise<DestinationContact[]> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const filtersByPriority: Array<Record<string, string>> = [
+    {
+      "contact_info.email": buildMemberEmailFilterValue(normalizedEmail),
+      "client.id": buildEqFilterValue(destinationClient.id),
+    },
+    {
+      "contact_info.email": buildMemberEmailFilterValue(normalizedEmail),
+      "client.name": buildEqFilterValue(destinationClient.name),
+    },
+    {
+      "contact_info.email": buildMemberEmailFilterValue(normalizedEmail),
+    },
+  ];
+
+  for (const filter of filtersByPriority) {
+    const response = await proxyCallWithRetry<{
+      data?: Record<string, unknown>[];
+    }>(apiKey, "/core/v1/contacts", "POST", { filter });
+
+    const matches = (response.data || [])
+      .map(extractDestinationContact)
+      .filter((contact): contact is DestinationContact => Boolean(contact))
+      .filter(
+        (contact) =>
+          contact.email?.trim().toLowerCase() === normalizedEmail
+      );
+
+    if (matches.length === 1) {
+      return matches;
+    }
+
+    if (matches.length > 1) {
+      const exactClientIdMatches = matches.filter(
+        (contact) => contact.clientId === destinationClient.id
+      );
+      if (exactClientIdMatches.length === 1) {
+        return exactClientIdMatches;
+      }
+
+      const exactClientNameMatches = matches.filter(
+        (contact) =>
+          normalizeName(contact.clientName || "") ===
+          normalizeName(destinationClient.name)
+      );
+      if (exactClientNameMatches.length === 1) {
+        return exactClientNameMatches;
+      }
+
+      return matches;
+    }
+  }
+
+  return [];
 }
 
 async function candidateWorksForDeliverables(
@@ -1960,18 +2055,95 @@ async function migrateRecord(
       );
     }
 
-    const contactIds = extractIds(
-      record.attendees?.contacts ||
-        record.attendee_contacts ||
-        record.contacts
-    );
-    if (contactIds.length > 0) {
+    const sourceContactAttendees = Array.isArray(record.contact_attendees)
+      ? record.contact_attendees
+      : Array.isArray(record.attendees?.contacts)
+      ? record.attendees.contacts
+      : Array.isArray(record.attendee_contacts)
+      ? record.attendee_contacts
+      : Array.isArray(record.contacts)
+      ? record.contacts
+      : [];
+
+    const matchedContactIds: string[] = [];
+    let unresolvedCount = 0;
+    let skippedDeletedCount = 0;
+
+    for (const attendee of sourceContactAttendees) {
+      if (!isRecord(attendee)) {
+        unresolvedCount += 1;
+        continue;
+      }
+
+      if (attendee.is_deleted === true) {
+        skippedDeletedCount += 1;
+        continue;
+      }
+
+      const attendeeLabel =
+        asText(attendee.label) || asText(attendee.name) || "Meeting attendee";
+      const attendeeEmail = asText(attendee.email);
+
+      if (!attendeeEmail) {
+        unresolvedCount += 1;
+        warnings.push(
+          buildWarning(
+            destinationClient.name,
+            OBJECT_LABELS.meetings,
+            recordName,
+            `Meeting attendee '${attendeeLabel}' could not be matched because no email was provided on the source meeting.`
+          )
+        );
+        continue;
+      }
+
+      const matches = await lookupDestinationContactsByEmail(
+        destinationApiKey,
+        destinationClient,
+        attendeeEmail
+      );
+
+      if (matches.length === 1) {
+        matchedContactIds.push(matches[0].id);
+        continue;
+      }
+
+      unresolvedCount += 1;
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.meetings,
+          recordName,
+          matches.length === 0
+            ? `Meeting attendee '${attendeeEmail}' could not be matched to an existing destination contact.`
+            : `Meeting attendee '${attendeeEmail}' matched multiple destination contacts and was not attached.`
+        )
+      );
+    }
+
+    if (matchedContactIds.length > 0) {
       await sleep(DEFAULT_DELAY_MS);
       await proxyCallWithRetry(
         destinationApiKey,
         `/lifecycle-manager/v1/meetings/${created.id}/attendees/contacts`,
         "POST",
-        { contact_ids: contactIds }
+        { contact_ids: [...new Set(matchedContactIds)] }
+      );
+    }
+
+    if (
+      sourceContactAttendees.length > 0 ||
+      matchedContactIds.length > 0 ||
+      unresolvedCount > 0 ||
+      skippedDeletedCount > 0
+    ) {
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.meetings,
+          recordName,
+          `Meeting client attendees processed - matched: ${matchedContactIds.length}, attached: ${[...new Set(matchedContactIds)].length}, unresolved: ${unresolvedCount}, skipped deleted: ${skippedDeletedCount}.`
+        )
       );
     }
 
