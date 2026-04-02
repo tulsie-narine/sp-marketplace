@@ -698,6 +698,36 @@ function normalizeDeliverableStatus(value: unknown): "Draft" | "Published" | nul
   return null;
 }
 
+async function resolveListedDeliverableId(
+  apiKey: string,
+  clientId: string,
+  createdId: string,
+  deliverableName: string
+): Promise<string> {
+  const response = await proxyCallWithRetry<{
+    data?: Record<string, unknown>[];
+  }>(
+    apiKey,
+    `/lifecycle-manager/v1/clients/${encodeURIComponent(clientId)}/deliverables`
+  );
+
+  const deliverables = Array.isArray(response.data) ? response.data : [];
+
+  const byId = deliverables.find((item) => asText(item.id) === createdId);
+  if (byId && asText(byId.id)) {
+    return asText(byId.id)!;
+  }
+
+  const byName = deliverables.find((item) => asText(item.name) === deliverableName);
+  if (byName && asText(byName.id)) {
+    return asText(byName.id)!;
+  }
+
+  throw new Error(
+    `Created deliverable '${deliverableName}' could not be resolved from the destination client deliverables list.`
+  );
+}
+
 function collectShortIdCandidates(
   value: unknown,
   results: Set<string>,
@@ -1995,9 +2025,16 @@ async function migrateRecord(
   if (sourceDeliverableStatus) {
     try {
       await sleep(DEFAULT_DELAY_MS);
+      const listedDeliverableId = await resolveListedDeliverableId(
+        destinationApiKey,
+        deliverableClientId,
+        createdId,
+        getRecordName(record, "Migrated Deliverable")
+      );
+      await sleep(DEFAULT_DELAY_MS);
       await proxyCallWithRetry(
         destinationApiKey,
-        `/lifecycle-manager/v1/deliverables/${createdId}`,
+        `/lifecycle-manager/v1/deliverables/${listedDeliverableId}`,
         "PATCH",
         { status: sourceDeliverableStatus }
       );
