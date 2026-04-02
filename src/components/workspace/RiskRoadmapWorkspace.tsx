@@ -389,7 +389,7 @@ export function RiskRoadmapWorkspace() {
 }
 
 // ==============================================
-// SCREEN 1 â€” PORTFOLIO
+// SCREEN 1 - PORTFOLIO
 // ==============================================
 
 interface PortfolioScreenProps {
@@ -415,7 +415,7 @@ function PortfolioScreen({
     return (
       <div className="flex items-center justify-center py-20">
         <Loader2 className="w-6 h-6 animate-spin text-primary mr-3" />
-        <span className="text-sm text-muted-foreground">Loading portfolio dataâ€¦</span>
+        <span className="text-sm text-muted-foreground">Loading portfolio data...</span>
       </div>
     );
   }
@@ -433,7 +433,7 @@ function PortfolioScreen({
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-heading font-bold">Portfolio Risk Overview</h2>
-        <p className="text-xs text-muted-foreground">{totalClients} clients Â· sorted by risk severity</p>
+        <p className="text-xs text-muted-foreground">{totalClients} clients - sorted by risk severity</p>
       </div>
 
       {/* Stat cards */}
@@ -446,7 +446,7 @@ function PortfolioScreen({
 
       {/* Search */}
       <Input
-        placeholder="Search clientsâ€¦"
+        placeholder="Search clients..."
         value={search}
         onChange={(e) => onSearchChange(e.target.value)}
         className="max-w-xs bg-[#111520] border-border"
@@ -484,7 +484,7 @@ function PortfolioScreen({
                 <td className="px-3 py-2.5 text-center"><TrendIcon value={c.trend_30} /></td>
                 <td className="px-3 py-2.5 text-center font-mono text-xs">{c.action_item_pct}%</td>
                 <td className="px-3 py-2.5 text-right">
-                  <span className="text-xs text-primary hover:underline">View â†’</span>
+                  <span className="text-xs text-primary hover:underline">View -&gt;</span>
                 </td>
               </tr>
             ))}
@@ -500,8 +500,8 @@ function PortfolioScreen({
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>Page {page + 1} of {totalPages}</span>
           <div className="flex gap-1">
-            <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => onPageChange(page - 1)}>â† Prev</Button>
-            <Button size="sm" variant="ghost" disabled={page >= totalPages - 1} onClick={() => onPageChange(page + 1)}>Next â†’</Button>
+            <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => onPageChange(page - 1)}>&lt;- Prev</Button>
+            <Button size="sm" variant="ghost" disabled={page >= totalPages - 1} onClick={() => onPageChange(page + 1)}>Next -&gt;</Button>
           </div>
         </div>
       )}
@@ -519,7 +519,7 @@ function StatCard({ label, value, color }: { label: string; value: number; color
 }
 
 // ==============================================
-// SCREEN 2 â€” CLIENT WORKSPACE
+// SCREEN 2 - CLIENT WORKSPACE
 // ==============================================
 
 interface WorkspaceScreenProps {
@@ -851,7 +851,7 @@ function HeatmapView({ data }: { data: Map<string, ClientRisk[]> }) {
                     </PopoverTrigger>
                     {count > 0 && (
                       <PopoverContent className="w-48 p-2" side="top">
-                        <p className="text-xs font-medium mb-1">L{x} Ã— I{y} ({count} risks)</p>
+                        <p className="text-xs font-medium mb-1">L{x} x I{y} ({count} risks)</p>
                         {risks.slice(0, 5).map((r) => (
                           <p key={r.id} className="text-xs text-muted-foreground truncate">{r.code}: {r.name}</p>
                         ))}
@@ -906,7 +906,7 @@ function StatusPill({ label, value }: { label: string; value: number }) {
 }
 
 // ==============================================
-// SCREEN 3 â€” PLANNING DRAWER
+// SCREEN 3 - PLANNING DRAWER
 // ==============================================
 
 interface PlanningDrawerProps {
@@ -1099,7 +1099,7 @@ function ActionItemForm({ risks, clientId, apiKey, onCreated }: { risks: ClientR
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <FieldLabel label="Effort (hours, 0â€“8)">
+          <FieldLabel label="Effort (hours, 0-8)">
             <Input type="number" min={0} max={8} value={form.efforts_in_hours} onChange={(e) => set("efforts_in_hours", Number(e.target.value))} className="bg-[#111520]" />
           </FieldLabel>
           <FieldLabel label="Cost">
@@ -1161,7 +1161,7 @@ function InitiativePromoteForm({
   };
 
   const [name, setName] = useState(risks.length === 1 ? primary?.name || "" : risks.map((r) => r.name).join(" + "));
-  const [summary, setSummary] = useState(risks.map((r) => [r.description, r.business_impact].filter(Boolean).join(" â€” ")).join("\n\n"));
+  const [summary, setSummary] = useState(risks.map((r) => [r.description, r.business_impact].filter(Boolean).join(" - ")).join("\n\n"));
   const [status, setStatus] = useState("Proposed");
   const [priority, setPriority] = useState(mapPriority(primary?.current_risk_label || ""));
   const [year, setYear] = useState(defaultYear);
@@ -1232,12 +1232,12 @@ function InitiativePromoteForm({
               {s.status === "success" && <CheckCircle2 className="w-4 h-4 text-[#22c55e]" />}
               {s.status === "error" && <XCircle className="w-4 h-4 text-[#ef4444]" />}
               <span className={s.status === "error" ? "text-[#ef4444]" : ""}>{s.name}</span>
-              {s.error && <span className="text-xs text-[#ef4444]">â€” {s.error}</span>}
+              {s.error && <span className="text-xs text-[#ef4444]">- {s.error}</span>}
             </div>
           ))}
           {deployed && (
             <div className="mt-3 p-3 bg-[#22c55e]/10 border border-[#22c55e]/20 rounded-lg text-sm">
-              âœ“ Initiative created.{" "}
+              Initiative created.{" "}
               {roadmapUrl ? (
                 <a
                   href={roadmapUrl}
@@ -1245,10 +1245,10 @@ function InitiativePromoteForm({
                   rel="noreferrer"
                   className="text-primary hover:underline"
                 >
-                  View in ScalePad â†’
+                  View in ScalePad -&gt;
                 </a>
               ) : (
-                <span className="text-muted-foreground">View in ScalePad â†’</span>
+                <span className="text-muted-foreground">View in ScalePad -&gt;</span>
               )}
             </div>
           )}
