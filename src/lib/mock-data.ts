@@ -121,4 +121,24 @@ export const SEED_APPS: MarketplaceApp[] = [
     },
     created_at: "2026-04-02T10:00:00Z",
   },
+  {
+    id: "app-013",
+    name: "LCM Data Reset",
+    description:
+      "A dedicated clone of the Tenant Migration utility that will be adapted into a controlled Lifecycle Manager reset workflow.",
+    how_it_works:
+      "Starts from the same client-mapping and execution framework as Tenant Migration, but is registered as its own app so it can evolve independently into a reset-focused Lifecycle Manager utility.",
+    category: "Utilities",
+    icon: "🧰",
+    status: "active",
+    version: "1.0.0",
+    author: "ScalePad Team",
+    api_endpoint: "/lifecycle-manager/v1/*",
+    input_schema: {
+      realApi: true,
+      appType: "lcm-data-reset",
+      fields: [],
+    },
+    created_at: "2026-04-10T10:00:00Z",
+  },
 ];

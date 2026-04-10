@@ -7,6 +7,7 @@ import { OpportunitiesWorkspace } from "@/components/workspace/OpportunitiesWork
 import { InitiativeManagerWorkspace } from "@/components/workspace/InitiativeManagerWorkspace";
 import { GoalManagerWorkspace } from "@/components/workspace/GoalManagerWorkspace";
 import { TenantMigrationWorkspace } from "@/components/workspace/TenantMigrationWorkspace";
+import { LcmDataResetWorkspace } from "@/components/workspace/LcmDataResetWorkspace";
 import { ClientCleanUpWorkspace } from "@/components/workspace/ClientCleanUpWorkspace";
 import { RiskRoadmapWorkspace } from "@/components/workspace/RiskRoadmapWorkspace";
 import { AppRatingsComments } from "@/components/marketplace/AppRatingsComments";
@@ -90,6 +91,8 @@ export default function AppDetail() {
           <GoalManagerWorkspace />
         ) : (app.input_schema as any)?.appType === "tenant-migration" ? (
           <TenantMigrationWorkspace />
+        ) : (app.input_schema as any)?.appType === "lcm-data-reset" ? (
+          <LcmDataResetWorkspace />
         ) : (app.input_schema as any)?.appType === "client-cleanup" ? (
           <ClientCleanUpWorkspace />
         ) : (app.input_schema as any)?.appType === "risk-roadmap" ? (

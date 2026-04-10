@@ -43,6 +43,36 @@ const OBJECT_OPTIONS: { key: keyof SelectedObjects; label: string }[] = [
 
 type FinalTab = (typeof FINAL_TABS)[number];
 
+type TenantMigrationWorkspaceCopy = {
+  title: string;
+  subtitle: string;
+  stepFourLabel: string;
+  runButtonLabel: string;
+  runningTitle: string;
+  completeToastTitle: string;
+  stoppedToastTitle: string;
+  completeHeading: string;
+  runAgainLabel: string;
+  errorCsvFilename: string;
+  debugJsonFilename: string;
+  finalSummaryVerb: string;
+};
+
+const DEFAULT_COPY: TenantMigrationWorkspaceCopy = {
+  title: "Tenant Migration",
+  subtitle: "Migrate data from one ScalePad tenant to another",
+  stepFourLabel: "Migration",
+  runButtonLabel: "Start Migration",
+  runningTitle: "Migration in Progress - do not close this window",
+  completeToastTitle: "Migration complete",
+  stoppedToastTitle: "Migration stopped unexpectedly",
+  completeHeading: "Migration Complete",
+  runAgainLabel: "Run Another Migration",
+  errorCsvFilename: "tenant-migration-errors.csv",
+  debugJsonFilename: "tenant-migration-debug-export.json",
+  finalSummaryVerb: "migrated",
+};
+
 const DEFAULT_SELECTED_OBJECTS: SelectedObjects = {
   initiatives: true,
   goals: true,
@@ -91,12 +121,18 @@ function Pagination({
   );
 }
 
-function StepIndicator({ currentScreen }: { currentScreen: 1 | 2 | 3 | 4 }) {
+function StepIndicator({
+  currentScreen,
+  stepFourLabel,
+}: {
+  currentScreen: 1 | 2 | 3 | 4;
+  stepFourLabel: string;
+}) {
   const steps = [
     { id: 1, label: "Source Key" },
     { id: 2, label: "Client Mapping" },
     { id: 3, label: "Object Selection" },
-    { id: 4, label: "Migration" },
+    { id: 4, label: stepFourLabel },
   ] as const;
 
   return (
@@ -177,7 +213,11 @@ function ProgressPill({
   return <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] font-medium text-destructive">✗ {succeeded}/{total}</span>;
 }
 
-export function TenantMigrationWorkspace() {
+export function TenantMigrationWorkspace({
+  copy = DEFAULT_COPY,
+}: {
+  copy?: TenantMigrationWorkspaceCopy;
+}) {
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -370,12 +410,12 @@ export function TenantMigrationWorkspace() {
       });
       setMigrationResult(result);
       toast({
-        title: "Migration complete",
-        description: `${result.clientSummaries.length} clients migrated, ${result.totalCreated} objects created, ${result.totalFailures} failures.`,
+        title: copy.completeToastTitle,
+        description: `${result.clientSummaries.length} clients ${copy.finalSummaryVerb}, ${result.totalCreated} objects created, ${result.totalFailures} failures.`,
       });
     } catch (error) {
       toast({
-        title: "Migration stopped unexpectedly",
+        title: copy.stoppedToastTitle,
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive",
       });
@@ -409,7 +449,7 @@ export function TenantMigrationWorkspace() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "tenant-migration-errors.csv";
+    link.download = copy.errorCsvFilename;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -446,7 +486,7 @@ export function TenantMigrationWorkspace() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "tenant-migration-debug-export.json";
+    link.download = copy.debugJsonFilename;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -476,8 +516,8 @@ export function TenantMigrationWorkspace() {
         <div className="mb-2 flex items-center gap-3">
           <span className="text-4xl">🔄</span>
           <div>
-            <h2 className="font-heading text-2xl font-bold text-foreground">Tenant Migration</h2>
-            <p className="text-sm text-muted-foreground">Migrate data from one ScalePad tenant to another</p>
+            <h2 className="font-heading text-2xl font-bold text-foreground">{copy.title}</h2>
+            <p className="text-sm text-muted-foreground">{copy.subtitle}</p>
           </div>
         </div>
       </div>
@@ -752,7 +792,7 @@ export function TenantMigrationWorkspace() {
           disabled={selectedObjectCount === 0 || (requiresAssigneeEmail && !hasValidAssigneeEmail)}
           className="inline-flex items-center gap-2 rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Start Migration
+          {copy.runButtonLabel}
           <ArrowRight className="h-4 w-4" />
         </button>
       </div>
@@ -764,7 +804,7 @@ export function TenantMigrationWorkspace() {
       <div className="rounded-lg border border-border bg-card p-5">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
-            <h3 className="font-heading text-lg font-bold text-foreground">Migration in Progress - do not close this window</h3>
+            <h3 className="font-heading text-lg font-bold text-foreground">{copy.runningTitle}</h3>
             <p className="text-sm text-muted-foreground">Client {Math.min(completedClients + 1, Math.max(migrationProgress.length, 1))} of {migrationProgress.length}</p>
           </div>
           <div className="rounded-full bg-warning/15 px-3 py-1 text-xs font-medium text-warning">
@@ -823,7 +863,7 @@ export function TenantMigrationWorkspace() {
         <div className="rounded-lg border border-border bg-card p-5">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <h3 className="font-heading text-lg font-bold text-foreground">Migration Complete</h3>
+              <h3 className="font-heading text-lg font-bold text-foreground">{copy.completeHeading}</h3>
               <p className="text-sm text-muted-foreground">
                 {migrationResult.clientSummaries.length} clients migrated · {migrationResult.totalCreated} objects created · {migrationResult.totalFailures} failures
               </p>
@@ -1052,7 +1092,7 @@ export function TenantMigrationWorkspace() {
             onClick={resetWorkflow}
             className="rounded-md border border-border px-4 py-2 text-sm text-foreground transition-colors hover:bg-surface-raised"
           >
-            Run Another Migration
+            {copy.runAgainLabel}
           </button>
           <button
             onClick={() => navigate("/marketplace")}
@@ -1067,7 +1107,7 @@ export function TenantMigrationWorkspace() {
 
   return (
     <div className="space-y-4">
-      <StepIndicator currentScreen={currentScreen} />
+      <StepIndicator currentScreen={currentScreen} stepFourLabel={copy.stepFourLabel} />
 
       {currentScreen === 1 && renderScreenOne()}
       {currentScreen === 2 && renderScreenTwo()}
