@@ -234,7 +234,7 @@ export default function DemoDataGenerator({
   const apiGet = useCallback(
     async <T,>(resource: string, token: string): Promise<T[]> => {
       const payload = await proxyRequest({
-        url: `${RESOURCE_SERVER}/${resource}?pageinate=false`,
+        url: `${RESOURCE_SERVER}/${resource}?paginate=false`,
         method: "GET",
         headers: {
           Authorization: `Bearer ${token}`,
