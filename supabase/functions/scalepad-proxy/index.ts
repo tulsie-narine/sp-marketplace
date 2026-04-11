@@ -64,7 +64,7 @@ Deno.serve(async (req) => {
       };
     }
 
-    const contentType = requestHeaders["Content-Type"] || requestHeaders["content-type"] || "";
+    const reqContentType = requestHeaders["Content-Type"] || requestHeaders["content-type"] || "";
     if (body !== undefined && body !== null) {
       if (typeof body === "string") {
         requestBody = body;
