@@ -59,11 +59,11 @@ interface GeneratedTicket {
   details: string;
   client_id: number | string;
   user_id: number | string;
-  agent_id: number | string;
-  priority_id: number | string;
-  status_id: number | string;
-  category_1: number | string;
   dateoccurred: string;
+  agent_id?: number | string;
+  priority_id?: number | string;
+  status_id?: number | string;
+  category_1?: number | string;
 }
 
 interface DemoDataGeneratorProps {
@@ -127,7 +127,6 @@ function normalizeCollection<T>(value: unknown): T[] {
   if (Array.isArray(value)) return value as T[];
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>;
-    // Check common wrapper keys: "data", or find the first array property
     if (Array.isArray(record.data)) return record.data as T[];
     for (const key of Object.keys(record)) {
       if (key === "upstream_status" || key === "record_count" || key === "error") continue;
@@ -138,6 +137,10 @@ function normalizeCollection<T>(value: unknown): T[] {
 }
 
 function formatError(status: number, payload: unknown) {
+  if (typeof payload === "string" && payload.trim()) {
+    return `${status} ${payload}`;
+  }
+
   if (payload && typeof payload === "object") {
     const record = payload as Record<string, unknown>;
     const detail =
@@ -148,9 +151,17 @@ function formatError(status: number, payload: unknown) {
         typeof record.errors[0] === "object" &&
         record.errors[0] &&
         typeof (record.errors[0] as Record<string, unknown>).detail === "string" &&
-        ((record.errors[0] as Record<string, unknown>).detail as string));
+        ((record.errors[0] as Record<string, unknown>).detail as string)) ||
+      Object.keys(record)
+        .filter((key) => /^\d+$/.test(key))
+        .sort((a, b) => Number(a) - Number(b))
+        .map((key) => record[key])
+        .filter((value): value is string => typeof value === "string")
+        .join("");
+
     if (detail) return `${status} ${detail}`;
   }
+
   return `${status} Request failed`;
 }
 
@@ -338,6 +349,15 @@ export default function DemoDataGenerator({
 
   const generateDemoData = useCallback(async () => {
     if (!authToken) return;
+
+    if (!ticketTypes.length || !categories.length) {
+      setDiscoveryWarnings((prev) => [
+        ...prev,
+        "Ticket generation requires at least one ticket type and one category from Halo.",
+      ]);
+      return;
+    }
+
     setPanelPhase("generating");
     setLogLines([]);
     setTicketsCreated(0);
@@ -369,12 +389,8 @@ export default function DemoDataGenerator({
         const agent = safeAgents.length
           ? safeAgents[(clientIndex + ticketIndex) % safeAgents.length]
           : null;
-        const ticketType = safeTicketTypes.length
-          ? safeTicketTypes[(clientIndex + ticketIndex) % safeTicketTypes.length]
-          : null;
-        const category = safeCategories.length
-          ? safeCategories[(clientIndex + ticketIndex) % safeCategories.length]
-          : null;
+        const ticketType = safeTicketTypes[(clientIndex + ticketIndex) % safeTicketTypes.length];
+        const category = safeCategories[(clientIndex + ticketIndex) % safeCategories.length];
         const priority = safePriorities.length
           ? safePriorities[(ticketIndex + clientIndex) % safePriorities.length]
           : null;
@@ -383,16 +399,16 @@ export default function DemoDataGenerator({
           : null;
 
         const ticket: GeneratedTicket = {
-          tickettype_id: ticketType?.id ?? 0,
+          tickettype_id: ticketType.id,
           summary: template.summary,
           details: template.details,
           client_id: client.id,
           user_id: user.id,
-          agent_id: agent?.id ?? 0,
-          priority_id: priority?.id ?? 0,
-          status_id: status?.id ?? 0,
-          category_1: category?.id ?? 0,
           dateoccurred: isoDateWithinLast90Days(ticketIndex + clientIndex),
+          ...(agent?.id ? { agent_id: agent.id } : {}),
+          ...(priority?.id ? { priority_id: priority.id } : {}),
+          ...(status?.id ? { status_id: status.id } : {}),
+          ...(category?.id ? { category_1: category.id } : {}),
         };
 
         try {
@@ -551,7 +567,10 @@ export default function DemoDataGenerator({
                 <Button variant="outline" onClick={resetState}>
                   Cancel
                 </Button>
-                <Button onClick={generateDemoData}>
+                <Button
+                  onClick={generateDemoData}
+                  disabled={!clients.length || !users.length || !ticketTypes.length || !categories.length}
+                >
                   <PlugZap className="mr-2 h-4 w-4" />
                   Generate Demo Data
                 </Button>
