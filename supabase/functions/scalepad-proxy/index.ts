@@ -92,7 +92,7 @@ Deno.serve(async (req) => {
     // Handle 204 No Content (DELETE, some PUTs)
     let data: Record<string, unknown> = {};
     const respContentType = response.headers.get("content-type") || "";
-    if (response.status !== 204 && contentType.includes("application/json")) {
+    if (response.status !== 204 && respContentType.includes("application/json")) {
       try {
         data = await response.json();
       } catch {
