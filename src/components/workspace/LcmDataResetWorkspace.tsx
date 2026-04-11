@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
@@ -13,6 +13,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import DemoDataGenerator from "@/components/workspace/DemoDataGenerator";
 import {
   DEFAULT_RESET_SELECTED_OBJECTS,
   RESET_OBJECT_OPTIONS,
@@ -76,7 +77,13 @@ function Pagination({
   );
 }
 
-function StepIndicator({ currentScreen }: { currentScreen: Screen }) {
+function StepIndicator({
+  currentScreen,
+  actions,
+}: {
+  currentScreen: Screen;
+  actions?: ReactNode;
+}) {
   const steps = [
     { id: 1, label: "Source Client" },
     { id: 2, label: "Destination Clients" },
@@ -86,32 +93,35 @@ function StepIndicator({ currentScreen }: { currentScreen: Screen }) {
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
-      <div className="flex flex-wrap items-center gap-3">
-        {steps.map((step, index) => (
-          <div key={step.id} className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <div
-                className={classNames(
-                  "flex h-8 w-8 items-center justify-center rounded-full border text-xs font-semibold",
-                  currentScreen === step.id && "border-primary bg-primary/15 text-primary",
-                  currentScreen > step.id && "border-success bg-success/10 text-success",
-                  currentScreen < step.id && "border-border bg-surface-raised text-muted-foreground"
-                )}
-              >
-                {step.id}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {steps.map((step, index) => (
+            <div key={step.id} className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <div
+                  className={classNames(
+                    "flex h-8 w-8 items-center justify-center rounded-full border text-xs font-semibold",
+                    currentScreen === step.id && "border-primary bg-primary/15 text-primary",
+                    currentScreen > step.id && "border-success bg-success/10 text-success",
+                    currentScreen < step.id && "border-border bg-surface-raised text-muted-foreground"
+                  )}
+                >
+                  {step.id}
+                </div>
+                <span
+                  className={classNames(
+                    "text-xs font-medium",
+                    currentScreen === step.id ? "text-foreground" : "text-muted-foreground"
+                  )}
+                >
+                  {step.label}
+                </span>
               </div>
-              <span
-                className={classNames(
-                  "text-xs font-medium",
-                  currentScreen === step.id ? "text-foreground" : "text-muted-foreground"
-                )}
-              >
-                {step.label}
-              </span>
+              {index < steps.length - 1 && <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />}
             </div>
-            {index < steps.length - 1 && <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />}
-          </div>
-        ))}
+          ))}
+        </div>
+        {actions && <div className="ml-auto">{actions}</div>}
       </div>
     </div>
   );
@@ -1069,7 +1079,10 @@ export function LcmDataResetWorkspace() {
 
   return (
     <div className="space-y-4">
-      <StepIndicator currentScreen={currentScreen} />
+      <StepIndicator
+        currentScreen={currentScreen}
+        actions={<DemoDataGenerator triggerLabel="Generate PSA Data" />}
+      />
 
       {currentScreen === 1 && renderScreenOne()}
       {currentScreen === 2 && renderScreenTwo()}
