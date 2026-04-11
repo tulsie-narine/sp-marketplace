@@ -125,8 +125,14 @@ function sleep(ms: number) {
 
 function normalizeCollection<T>(value: unknown): T[] {
   if (Array.isArray(value)) return value as T[];
-  if (value && typeof value === "object" && Array.isArray((value as { data?: unknown[] }).data)) {
-    return (value as { data: T[] }).data;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    // Check common wrapper keys: "data", or find the first array property
+    if (Array.isArray(record.data)) return record.data as T[];
+    for (const key of Object.keys(record)) {
+      if (key === "upstream_status" || key === "record_count" || key === "error") continue;
+      if (Array.isArray(record[key])) return record[key] as T[];
+    }
   }
   return [];
 }
