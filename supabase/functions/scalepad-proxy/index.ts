@@ -98,6 +98,15 @@ Deno.serve(async (req) => {
       } catch {
         // empty body is fine
       }
+    } else if (response.status !== 204) {
+      try {
+        const text = await response.text();
+        if (text) {
+          data = { response_text: text };
+        }
+      } catch {
+        // empty body is fine
+      }
     }
 
     // Always return 200 to avoid supabase.functions.invoke treating non-2xx as errors

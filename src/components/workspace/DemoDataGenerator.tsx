@@ -237,6 +237,7 @@ function formatError(status: number, payload: unknown) {
       (typeof record.error_description === "string" && record.error_description) ||
       (typeof record.message === "string" && record.message) ||
       (typeof record.error === "string" && record.error) ||
+      (typeof record.response_text === "string" && record.response_text) ||
       (Array.isArray(record.errors) &&
         typeof record.errors[0] === "object" &&
         record.errors[0] &&
@@ -291,6 +292,39 @@ function isoDateWithinLast90Days(index: number) {
   now.setDate(now.getDate() - offsetDays);
   now.setHours(8 + (index % 9), (index * 7) % 60, 0, 0);
   return now.toISOString();
+}
+
+function buildTicketPayloadVariants(ticket: GeneratedTicket) {
+  const objectBase = {
+    summary: ticket.summary,
+    client_id: ticket.client_id,
+    user_id: ticket.user_id,
+    tickettype_id: ticket.tickettype_id,
+    dateoccurred: ticket.dateoccurred,
+    ...(ticket.agent_id ? { agent_id: ticket.agent_id } : {}),
+    ...(ticket.priority_id ? { priority_id: ticket.priority_id } : {}),
+    ...(ticket.status_id ? { status_id: ticket.status_id } : {}),
+    ...(ticket.category_1 ? { category_1: ticket.category_1 } : {}),
+  };
+
+  return [
+    {
+      label: "array-details",
+      body: [{ ...objectBase, details: ticket.details }],
+    },
+    {
+      label: "array-details_html",
+      body: [{ ...objectBase, details_html: ticket.details }],
+    },
+    {
+      label: "object-details",
+      body: { ...objectBase, details: ticket.details },
+    },
+    {
+      label: "object-details_html",
+      body: { ...objectBase, details_html: ticket.details },
+    },
+  ];
 }
 
 export default function DemoDataGenerator({
@@ -603,15 +637,32 @@ export default function DemoDataGenerator({
         };
 
         try {
-          await proxyRequest({
-            url: `${RESOURCE_SERVER}/Tickets`,
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: [ticket],
-          });
+          let created = false;
+          let lastError = "Unknown error";
+          const payloadVariants = buildTicketPayloadVariants(ticket);
+
+          for (const variant of payloadVariants) {
+            try {
+              await proxyRequest({
+                url: `${RESOURCE_SERVER}/Tickets`,
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${authToken}`,
+                },
+                body: variant.body,
+              });
+              created = true;
+              break;
+            } catch (error) {
+              lastError = error instanceof Error ? error.message : "Unknown error";
+            }
+          }
+
+          if (!created) {
+            throw new Error(lastError);
+          }
+
           setTicketsCreated((prev) => prev + 1);
           appendLog(`✅ [${client.name}] Ticket ${ticketIndex + 1}/10 created — "${template.summary}"`);
         } catch (error) {
