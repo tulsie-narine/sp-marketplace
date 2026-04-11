@@ -53,6 +53,8 @@ interface Status {
   name?: string;
 }
 
+interface ExistingTicket extends Record<string, unknown> {}
+
 interface GeneratedTicket {
   tickettype_id: number | string;
   summary: string;
@@ -161,6 +163,59 @@ function describePayload(value: unknown) {
   const topLevelKeys = Object.keys(record);
   const arrayKeys = topLevelKeys.filter((key) => Array.isArray(record[key]));
   return { topLevelKeys, arrayKeys };
+}
+
+function asScalarId(value: unknown): string | number | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  return null;
+}
+
+function asLabel(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return (
+      asLabel(record.name) ||
+      asLabel(record.label) ||
+      asLabel(record.text) ||
+      asLabel(record.value)
+    );
+  }
+  return undefined;
+}
+
+function deriveOptions<T extends { id: string | number; name?: string }>(
+  tickets: ExistingTicket[],
+  specs: Array<{ idKeys: string[]; labelKeys: string[] }>
+): T[] {
+  const results = new Map<string, T>();
+
+  for (const ticket of tickets) {
+    for (const spec of specs) {
+      const rawId = spec.idKeys.map((key) => ticket[key]).find((value) => asScalarId(value) !== null);
+      const id = asScalarId(rawId);
+      if (id === null) continue;
+
+      const label = spec.labelKeys
+        .map((key) => asLabel(ticket[key]))
+        .find((value) => Boolean(value));
+
+      const mapKey = String(id);
+      if (!results.has(mapKey)) {
+        results.set(mapKey, { id, ...(label ? { name: label } : {}) } as T);
+      }
+      break;
+    }
+  }
+
+  return Array.from(results.values());
 }
 
 function formatError(status: number, payload: unknown) {
@@ -371,19 +426,68 @@ export default function DemoDataGenerator({
         probeDiscovery<Agent>("Agents", ["Agent", "Agents"]),
         probeDiscovery<Priority>("Priorities", ["Priority", "Priorities"]),
         probeDiscovery<Status>("Statuses", ["Status", "Statuses"]),
+        probeDiscovery<ExistingTicket>("Tickets", ["Tickets", "Ticket"]),
       ]);
 
-      const [clientsResult, usersResult, ticketTypesResult, categoriesResult, agentsResult, prioritiesResult, statusesResult] =
+      const [clientsResult, usersResult, ticketTypesResult, categoriesResult, agentsResult, prioritiesResult, statusesResult, ticketsResult] =
         settled;
       const nextClients = clientsResult.data;
       const nextUsers = usersResult.data;
-      const nextTicketTypes = ticketTypesResult.data;
-      const nextCategories = categoriesResult.data;
-      const nextAgents = agentsResult.data;
-      const nextPriorities = prioritiesResult.data;
-      const nextStatuses = statusesResult.data;
-
       const warnings: string[] = [];
+      const recentTickets = ticketsResult.data;
+      let nextTicketTypes = ticketTypesResult.data;
+      let nextCategories = categoriesResult.data;
+      let nextAgents = agentsResult.data;
+      let nextPriorities = prioritiesResult.data;
+      let nextStatuses = statusesResult.data;
+
+      if (recentTickets.length > 0) {
+        if (nextTicketTypes.length === 0) {
+          nextTicketTypes = deriveOptions<TicketType>(recentTickets, [
+            { idKeys: ["tickettype_id", "type_id"], labelKeys: ["tickettypename", "tickettype", "type", "typename"] },
+          ]);
+          if (nextTicketTypes.length > 0) {
+            warnings.push(`Ticket types derived from existing tickets (${nextTicketTypes.length}).`);
+          }
+        }
+
+        if (nextCategories.length === 0) {
+          nextCategories = deriveOptions<Category>(recentTickets, [
+            { idKeys: ["category_1", "category1_id", "category_id"], labelKeys: ["category_1_name", "category1name", "category", "categoryname"] },
+          ]);
+          if (nextCategories.length > 0) {
+            warnings.push(`Categories derived from existing tickets (${nextCategories.length}).`);
+          }
+        }
+
+        if (nextAgents.length === 0) {
+          nextAgents = deriveOptions<Agent>(recentTickets, [
+            { idKeys: ["agent_id"], labelKeys: ["agent_name", "agent", "agentname"] },
+          ]);
+          if (nextAgents.length > 0) {
+            warnings.push(`Agents derived from existing tickets (${nextAgents.length}).`);
+          }
+        }
+
+        if (nextPriorities.length === 0) {
+          nextPriorities = deriveOptions<Priority>(recentTickets, [
+            { idKeys: ["priority_id"], labelKeys: ["priority_name", "priority", "priorityname"] },
+          ]);
+          if (nextPriorities.length > 0) {
+            warnings.push(`Priorities derived from existing tickets (${nextPriorities.length}).`);
+          }
+        }
+
+        if (nextStatuses.length === 0) {
+          nextStatuses = deriveOptions<Status>(recentTickets, [
+            { idKeys: ["status_id"], labelKeys: ["status_name", "status", "statusname"] },
+          ]);
+          if (nextStatuses.length > 0) {
+            warnings.push(`Statuses derived from existing tickets (${nextStatuses.length}).`);
+          }
+        }
+      }
+
       setDiscoveryProbeLog({
         clients: clientsResult.attempts,
         users: usersResult.attempts,
@@ -392,6 +496,7 @@ export default function DemoDataGenerator({
         agents: agentsResult.attempts,
         priorities: prioritiesResult.attempts,
         statuses: statusesResult.attempts,
+        tickets: ticketsResult.attempts,
       });
       settled.forEach((result) => {
         if (result.warning) warnings.push(result.warning);
