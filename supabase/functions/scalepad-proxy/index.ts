@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
     if (body !== undefined && body !== null) {
       if (typeof body === "string") {
         requestBody = body;
-      } else if (contentType.includes("application/x-www-form-urlencoded")) {
+      } else if (reqContentType.includes("application/x-www-form-urlencoded")) {
         requestBody = new URLSearchParams(
           Object.entries(body).reduce<Record<string, string>>((acc, [key, value]) => {
             if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
