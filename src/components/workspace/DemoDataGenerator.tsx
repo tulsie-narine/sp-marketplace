@@ -567,7 +567,10 @@ export default function DemoDataGenerator({
                 <Button variant="outline" onClick={resetState}>
                   Cancel
                 </Button>
-                <Button onClick={generateDemoData}>
+                <Button
+                  onClick={generateDemoData}
+                  disabled={!clients.length || !users.length || !ticketTypes.length || !categories.length}
+                >
                   <PlugZap className="mr-2 h-4 w-4" />
                   Generate Demo Data
                 </Button>
