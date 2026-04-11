@@ -10,31 +10,83 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { endpoint, method, body } = await req.json();
+    const { endpoint, method, body, url, headers: customHeaders } = await req.json();
 
-    const scalepadApiKey = (req.headers.get("x-scalepad-api-key") || "").trim();
-    if (!scalepadApiKey) {
-      return new Response(
-        JSON.stringify({ error: "Missing x-scalepad-api-key header" }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    const requestMethod = method || "GET";
+    let targetUrl = "";
+    let requestHeaders: Record<string, string> = {
+      Accept: "application/json",
+    };
+    let requestBody: BodyInit | undefined = undefined;
 
-    if (!endpoint || !endpoint.startsWith("/") || endpoint.includes("..")) {
-      return new Response(
-        JSON.stringify({ error: "Invalid endpoint path" }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    if (typeof url === "string" && url.trim()) {
+      try {
+        const parsedUrl = new URL(url);
+        if (parsedUrl.protocol !== "https:") {
+          throw new Error("Only https URLs are allowed");
+        }
+        targetUrl = parsedUrl.toString();
+      } catch {
+        return new Response(
+          JSON.stringify({ error: "Invalid request url" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
 
-    const response = await fetch(`https://api.scalepad.com${endpoint}`, {
-      method: method || "GET",
-      headers: {
+      if (customHeaders && typeof customHeaders === "object") {
+        for (const [key, value] of Object.entries(customHeaders)) {
+          if (typeof value === "string" && value.trim()) {
+            requestHeaders[key] = value;
+          }
+        }
+      }
+    } else {
+      const scalepadApiKey = (req.headers.get("x-scalepad-api-key") || "").trim();
+      if (!scalepadApiKey) {
+        return new Response(
+          JSON.stringify({ error: "Missing x-scalepad-api-key header" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (!endpoint || !endpoint.startsWith("/") || endpoint.includes("..")) {
+        return new Response(
+          JSON.stringify({ error: "Invalid endpoint path" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      targetUrl = `https://api.scalepad.com${endpoint}`;
+      requestHeaders = {
+        ...requestHeaders,
         "x-api-key": scalepadApiKey,
-        Accept: "application/json",
         "Content-Type": "application/json",
-      },
-      body: body ? JSON.stringify(body) : undefined,
+      };
+    }
+
+    const contentType = requestHeaders["Content-Type"] || requestHeaders["content-type"] || "";
+    if (body !== undefined && body !== null) {
+      if (typeof body === "string") {
+        requestBody = body;
+      } else if (contentType.includes("application/x-www-form-urlencoded")) {
+        requestBody = new URLSearchParams(
+          Object.entries(body).reduce<Record<string, string>>((acc, [key, value]) => {
+            if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+              acc[key] = String(value);
+            }
+            return acc;
+          }, {})
+        ).toString();
+      } else {
+        requestHeaders["Content-Type"] = "application/json";
+        requestBody = JSON.stringify(body);
+      }
+    }
+
+    const response = await fetch(targetUrl, {
+      method: requestMethod,
+      headers: requestHeaders,
+      body: requestBody,
     });
 
     // Handle 204 No Content (DELETE, some PUTs)

@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { supabase } from "@/integrations/supabase/client";
 import { Lock, Loader2, PlugZap, TicketPlus, TriangleAlert } from "lucide-react";
 
 interface Client {
@@ -147,6 +148,36 @@ function formatError(status: number, payload: unknown) {
   return `${status} Request failed`;
 }
 
+async function proxyRequest<T = Record<string, unknown>>({
+  url,
+  method = "GET",
+  body,
+  headers,
+}: {
+  url: string;
+  method?: string;
+  body?: unknown;
+  headers?: Record<string, string>;
+}): Promise<T> {
+  const { data, error } = await supabase.functions.invoke("scalepad-proxy", {
+    body: { url, method, body, headers },
+  });
+
+  if (error) {
+    throw new Error(error.message || "Proxy request failed");
+  }
+
+  if (data?.error) {
+    throw new Error(String(data.error));
+  }
+
+  if (typeof data?.upstream_status === "number" && data.upstream_status >= 400) {
+    throw new Error(formatError(data.upstream_status, data));
+  }
+
+  return data as T;
+}
+
 function isoDateWithinLast90Days(index: number) {
   const now = new Date();
   const offsetDays = Math.floor(Math.random() * 90);
@@ -196,15 +227,13 @@ export default function DemoDataGenerator({
 
   const apiGet = useCallback(
     async <T,>(resource: string, token: string): Promise<T[]> => {
-      const response = await fetch(`${RESOURCE_SERVER}/${resource}?pageinate=false`, {
+      const payload = await proxyRequest({
+        url: `${RESOURCE_SERVER}/${resource}?pageinate=false`,
+        method: "GET",
         headers: {
           Authorization: `Bearer ${token}`,
         },
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(formatError(response.status, payload));
-      }
       return normalizeCollection<T>(payload);
     },
     []
@@ -221,16 +250,16 @@ export default function DemoDataGenerator({
         scope: "all",
         tenant: TENANT,
       });
-      const response = await fetch(`${AUTH_SERVER}/token`, {
+      const payload = await proxyRequest<{ access_token?: string }>({
+        url: `${AUTH_SERVER}/token`,
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body: body.toString(),
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || typeof payload.access_token !== "string") {
-        throw new Error(formatError(response.status, payload));
+      if (typeof payload.access_token !== "string") {
+        throw new Error("Authentication response did not include an access token.");
       }
 
       const token = payload.access_token as string;
@@ -361,18 +390,15 @@ export default function DemoDataGenerator({
         };
 
         try {
-          const response = await fetch(`${RESOURCE_SERVER}/Tickets`, {
+          await proxyRequest({
+            url: `${RESOURCE_SERVER}/Tickets`,
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${authToken}`,
             },
-            body: JSON.stringify([ticket]),
+            body: [ticket],
           });
-          const payload = await response.json().catch(() => ({}));
-          if (!response.ok) {
-            throw new Error(formatError(response.status, payload));
-          }
           setTicketsCreated((prev) => prev + 1);
           appendLog(`✅ [${client.name}] Ticket ${ticketIndex + 1}/10 created — "${template.summary}"`);
         } catch (error) {
