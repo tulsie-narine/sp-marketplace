@@ -349,6 +349,15 @@ export default function DemoDataGenerator({
 
   const generateDemoData = useCallback(async () => {
     if (!authToken) return;
+
+    if (!ticketTypes.length || !categories.length) {
+      setDiscoveryWarnings((prev) => [
+        ...prev,
+        "Ticket generation requires at least one ticket type and one category from Halo.",
+      ]);
+      return;
+    }
+
     setPanelPhase("generating");
     setLogLines([]);
     setTicketsCreated(0);
@@ -380,12 +389,8 @@ export default function DemoDataGenerator({
         const agent = safeAgents.length
           ? safeAgents[(clientIndex + ticketIndex) % safeAgents.length]
           : null;
-        const ticketType = safeTicketTypes.length
-          ? safeTicketTypes[(clientIndex + ticketIndex) % safeTicketTypes.length]
-          : null;
-        const category = safeCategories.length
-          ? safeCategories[(clientIndex + ticketIndex) % safeCategories.length]
-          : null;
+        const ticketType = safeTicketTypes[(clientIndex + ticketIndex) % safeTicketTypes.length];
+        const category = safeCategories[(clientIndex + ticketIndex) % safeCategories.length];
         const priority = safePriorities.length
           ? safePriorities[(ticketIndex + clientIndex) % safePriorities.length]
           : null;
@@ -394,16 +399,16 @@ export default function DemoDataGenerator({
           : null;
 
         const ticket: GeneratedTicket = {
-          tickettype_id: ticketType?.id ?? 0,
+          tickettype_id: ticketType.id,
           summary: template.summary,
           details: template.details,
           client_id: client.id,
           user_id: user.id,
-          agent_id: agent?.id ?? 0,
-          priority_id: priority?.id ?? 0,
-          status_id: status?.id ?? 0,
-          category_1: category?.id ?? 0,
           dateoccurred: isoDateWithinLast90Days(ticketIndex + clientIndex),
+          ...(agent?.id ? { agent_id: agent.id } : {}),
+          ...(priority?.id ? { priority_id: priority.id } : {}),
+          ...(status?.id ? { status_id: status.id } : {}),
+          ...(category?.id ? { category_1: category.id } : {}),
         };
 
         try {
