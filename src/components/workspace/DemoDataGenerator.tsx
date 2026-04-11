@@ -59,11 +59,11 @@ interface GeneratedTicket {
   details: string;
   client_id: number | string;
   user_id: number | string;
-  agent_id: number | string;
-  priority_id: number | string;
-  status_id: number | string;
-  category_1: number | string;
   dateoccurred: string;
+  agent_id?: number | string;
+  priority_id?: number | string;
+  status_id?: number | string;
+  category_1?: number | string;
 }
 
 interface DemoDataGeneratorProps {
@@ -127,7 +127,6 @@ function normalizeCollection<T>(value: unknown): T[] {
   if (Array.isArray(value)) return value as T[];
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>;
-    // Check common wrapper keys: "data", or find the first array property
     if (Array.isArray(record.data)) return record.data as T[];
     for (const key of Object.keys(record)) {
       if (key === "upstream_status" || key === "record_count" || key === "error") continue;
@@ -138,6 +137,10 @@ function normalizeCollection<T>(value: unknown): T[] {
 }
 
 function formatError(status: number, payload: unknown) {
+  if (typeof payload === "string" && payload.trim()) {
+    return `${status} ${payload}`;
+  }
+
   if (payload && typeof payload === "object") {
     const record = payload as Record<string, unknown>;
     const detail =
@@ -148,9 +151,17 @@ function formatError(status: number, payload: unknown) {
         typeof record.errors[0] === "object" &&
         record.errors[0] &&
         typeof (record.errors[0] as Record<string, unknown>).detail === "string" &&
-        ((record.errors[0] as Record<string, unknown>).detail as string));
+        ((record.errors[0] as Record<string, unknown>).detail as string)) ||
+      Object.keys(record)
+        .filter((key) => /^\d+$/.test(key))
+        .sort((a, b) => Number(a) - Number(b))
+        .map((key) => record[key])
+        .filter((value): value is string => typeof value === "string")
+        .join("");
+
     if (detail) return `${status} ${detail}`;
   }
+
   return `${status} Request failed`;
 }
 
