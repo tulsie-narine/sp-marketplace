@@ -64,11 +64,11 @@ Deno.serve(async (req) => {
       };
     }
 
-    const contentType = requestHeaders["Content-Type"] || requestHeaders["content-type"] || "";
+    const reqContentType = requestHeaders["Content-Type"] || requestHeaders["content-type"] || "";
     if (body !== undefined && body !== null) {
       if (typeof body === "string") {
         requestBody = body;
-      } else if (contentType.includes("application/x-www-form-urlencoded")) {
+      } else if (reqContentType.includes("application/x-www-form-urlencoded")) {
         requestBody = new URLSearchParams(
           Object.entries(body).reduce<Record<string, string>>((acc, [key, value]) => {
             if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
@@ -91,8 +91,8 @@ Deno.serve(async (req) => {
 
     // Handle 204 No Content (DELETE, some PUTs)
     let data: Record<string, unknown> = {};
-    const contentType = response.headers.get("content-type") || "";
-    if (response.status !== 204 && contentType.includes("application/json")) {
+    const respContentType = response.headers.get("content-type") || "";
+    if (response.status !== 204 && respContentType.includes("application/json")) {
       try {
         data = await response.json();
       } catch {
