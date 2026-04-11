@@ -146,6 +146,14 @@ function normalizeCollection<T>(value: unknown): T[] {
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>;
     if (Array.isArray(record.data)) return record.data as T[];
+    const numericKeys = Object.keys(record)
+      .filter((key) => /^\d+$/.test(key))
+      .sort((a, b) => Number(a) - Number(b));
+    if (numericKeys.length > 0) {
+      return numericKeys
+        .map((key) => record[key] as T)
+        .filter((item) => item !== undefined);
+    }
     for (const key of Object.keys(record)) {
       if (key === "upstream_status" || key === "record_count" || key === "error") continue;
       if (Array.isArray(record[key])) return record[key] as T[];
