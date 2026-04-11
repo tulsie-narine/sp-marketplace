@@ -72,6 +72,22 @@ interface DemoDataGeneratorProps {
 
 type PanelPhase = "idle" | "preview" | "generating" | "complete";
 
+interface DiscoveryProbeAttempt {
+  resource: string;
+  url: string;
+  topLevelKeys: string[];
+  normalizedCount: number;
+  arrayKeys: string[];
+  error?: string | null;
+}
+
+interface DiscoveryProbeResult<T> {
+  data: T[];
+  warning: string | null;
+  attempts: DiscoveryProbeAttempt[];
+  matchedResource: string | null;
+}
+
 const RESOURCE_SERVER = "https://backupradar.halopsa.com/api";
 const AUTH_SERVER = "https://backupradar.halopsa.com/auth";
 const CLIENT_ID = "7505c3fd-1f69-44b4-97df-1e05424801c5";
@@ -134,6 +150,17 @@ function normalizeCollection<T>(value: unknown): T[] {
     }
   }
   return [];
+}
+
+function describePayload(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { topLevelKeys: [] as string[], arrayKeys: [] as string[] };
+  }
+
+  const record = value as Record<string, unknown>;
+  const topLevelKeys = Object.keys(record);
+  const arrayKeys = topLevelKeys.filter((key) => Array.isArray(record[key]));
+  return { topLevelKeys, arrayKeys };
 }
 
 function formatError(status: number, payload: unknown) {
@@ -224,6 +251,9 @@ export default function DemoDataGenerator({
   const [logLines, setLogLines] = useState<string[]>([]);
   const [ticketsCreated, setTicketsCreated] = useState(0);
   const [totalTickets, setTotalTickets] = useState(0);
+  const [discoveryProbeLog, setDiscoveryProbeLog] = useState<
+    Record<string, DiscoveryProbeAttempt[]>
+  >({});
 
   const clientUserCounts = useMemo(
     () =>
@@ -243,7 +273,7 @@ export default function DemoDataGenerator({
   }, []);
 
   const apiGet = useCallback(
-    async <T,>(resource: string, token: string): Promise<T[]> => {
+    async <T,>(resource: string, token: string): Promise<{ payload: unknown; data: T[] }> => {
       const payload = await proxyRequest({
         url: `${RESOURCE_SERVER}/${resource}?paginate=false`,
         method: "GET",
@@ -251,7 +281,7 @@ export default function DemoDataGenerator({
           Authorization: `Bearer ${token}`,
         },
       });
-      return normalizeCollection<T>(payload);
+      return { payload, data: normalizeCollection<T>(payload) };
     },
     []
   );
@@ -283,25 +313,64 @@ export default function DemoDataGenerator({
       setAuthToken(token);
       setDiscoveryLoading(true);
 
-      const safeDiscovery = async <T,>(label: string, resource: string) => {
-        try {
-          return { data: await apiGet<T>(resource, token), warning: null };
-        } catch (error) {
-          return {
-            data: [] as T[],
-            warning: `${label} endpoint failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-          };
+      const probeDiscovery = async <T,>(
+        label: string,
+        resources: string[]
+      ): Promise<DiscoveryProbeResult<T>> => {
+        const attempts: DiscoveryProbeAttempt[] = [];
+
+        for (const resource of resources) {
+          try {
+            const { payload, data } = await apiGet<T>(resource, token);
+            const summary = describePayload(payload);
+            attempts.push({
+              resource,
+              url: `${RESOURCE_SERVER}/${resource}?paginate=false`,
+              topLevelKeys: summary.topLevelKeys,
+              arrayKeys: summary.arrayKeys,
+              normalizedCount: data.length,
+              error: null,
+            });
+
+            if (data.length > 0) {
+              return {
+                data,
+                warning:
+                  resource === resources[0]
+                    ? null
+                    : `${label} resolved using fallback endpoint '${resource}'.`,
+                attempts,
+                matchedResource: resource,
+              };
+            }
+          } catch (error) {
+            attempts.push({
+              resource,
+              url: `${RESOURCE_SERVER}/${resource}?paginate=false`,
+              topLevelKeys: [],
+              arrayKeys: [],
+              normalizedCount: 0,
+              error: error instanceof Error ? error.message : "Unknown error",
+            });
+          }
         }
+
+        return {
+          data: [] as T[],
+          warning: `${label} returned no records from endpoints: ${resources.join(", ")}`,
+          attempts,
+          matchedResource: null,
+        };
       };
 
       const settled = await Promise.all([
-        safeDiscovery<Client>("Clients", "Client"),
-        safeDiscovery<HaloUser>("Users", "Users"),
-        safeDiscovery<TicketType>("Ticket types", "TicketType"),
-        safeDiscovery<Category>("Categories", "Category"),
-        safeDiscovery<Agent>("Agents", "Agent"),
-        safeDiscovery<Priority>("Priorities", "Priority"),
-        safeDiscovery<Status>("Statuses", "Status"),
+        probeDiscovery<Client>("Clients", ["Client", "Clients"]),
+        probeDiscovery<HaloUser>("Users", ["Users", "User", "Contact", "Contacts"]),
+        probeDiscovery<TicketType>("Ticket types", ["TicketType", "TicketTypes", "Tickettype"]),
+        probeDiscovery<Category>("Categories", ["Category", "Categories"]),
+        probeDiscovery<Agent>("Agents", ["Agent", "Agents"]),
+        probeDiscovery<Priority>("Priorities", ["Priority", "Priorities"]),
+        probeDiscovery<Status>("Statuses", ["Status", "Statuses"]),
       ]);
 
       const [clientsResult, usersResult, ticketTypesResult, categoriesResult, agentsResult, prioritiesResult, statusesResult] =
@@ -315,16 +384,25 @@ export default function DemoDataGenerator({
       const nextStatuses = statusesResult.data;
 
       const warnings: string[] = [];
+      setDiscoveryProbeLog({
+        clients: clientsResult.attempts,
+        users: usersResult.attempts,
+        ticketTypes: ticketTypesResult.attempts,
+        categories: categoriesResult.attempts,
+        agents: agentsResult.attempts,
+        priorities: prioritiesResult.attempts,
+        statuses: statusesResult.attempts,
+      });
       settled.forEach((result) => {
         if (result.warning) warnings.push(result.warning);
       });
-      if (nextClients.length === 0) warnings.push("Clients endpoint returned no records.");
-      if (nextUsers.length === 0) warnings.push("Users endpoint returned no records.");
-      if (nextTicketTypes.length === 0) warnings.push("Ticket types endpoint returned no records.");
-      if (nextCategories.length === 0) warnings.push("Categories endpoint returned no records.");
-      if (nextAgents.length === 0) warnings.push("Agents endpoint returned no records.");
-      if (nextPriorities.length === 0) warnings.push("Priorities endpoint returned no records.");
-      if (nextStatuses.length === 0) warnings.push("Statuses endpoint returned no records.");
+      if (nextClients.length === 0) warnings.push("Clients lookup returned no usable records.");
+      if (nextUsers.length === 0) warnings.push("Users lookup returned no usable records.");
+      if (nextTicketTypes.length === 0) warnings.push("Ticket types lookup returned no usable records.");
+      if (nextCategories.length === 0) warnings.push("Categories lookup returned no usable records.");
+      if (nextAgents.length === 0) warnings.push("Agents lookup returned no usable records.");
+      if (nextPriorities.length === 0) warnings.push("Priorities lookup returned no usable records.");
+      if (nextStatuses.length === 0) warnings.push("Statuses lookup returned no usable records.");
 
       setClients(nextClients);
       setUsers(nextUsers);
@@ -455,6 +533,7 @@ export default function DemoDataGenerator({
     setLogLines([]);
     setTicketsCreated(0);
     setTotalTickets(0);
+    setDiscoveryProbeLog({});
   }, []);
 
   return (
@@ -552,6 +631,12 @@ export default function DemoDataGenerator({
                 </div>
               )}
 
+              {(!ticketTypes.length || !categories.length) && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  Generation is disabled until at least one ticket type and one category are discovered.
+                </div>
+              )}
+
               <ScrollArea className="h-72 rounded-md border border-border">
                 <div className="space-y-2 p-3">
                   {clientUserCounts.map(({ client, count }) => (
@@ -562,6 +647,37 @@ export default function DemoDataGenerator({
                   ))}
                 </div>
               </ScrollArea>
+
+              <div className="rounded-md border border-border bg-surface-raised/40 p-3">
+                <h4 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Discovery Debug
+                </h4>
+                <ScrollArea className="h-56">
+                  <div className="space-y-3 pr-3 text-xs">
+                    {Object.entries(discoveryProbeLog).map(([group, attempts]) => (
+                      <div key={group} className="rounded-md border border-border/70 bg-card px-3 py-2">
+                        <div className="mb-2 font-medium text-foreground">{group}</div>
+                        <div className="space-y-2">
+                          {attempts.map((attempt) => (
+                            <div key={attempt.url} className="rounded border border-border/60 px-2 py-2">
+                              <div className="font-mono text-muted-foreground">{attempt.url}</div>
+                              <div className="mt-1 text-muted-foreground">
+                                arrays: {attempt.arrayKeys.length ? attempt.arrayKeys.join(", ") : "none"} | count: {attempt.normalizedCount}
+                              </div>
+                              <div className="mt-1 text-muted-foreground">
+                                top-level keys: {attempt.topLevelKeys.length ? attempt.topLevelKeys.join(", ") : "none"}
+                              </div>
+                              {attempt.error && (
+                                <div className="mt-1 text-destructive">{attempt.error}</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              </div>
 
               <div className="flex flex-wrap justify-end gap-2">
                 <Button variant="outline" onClick={resetState}>
