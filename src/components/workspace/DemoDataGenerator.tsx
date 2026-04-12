@@ -320,7 +320,7 @@ function isoDateWithinLast90Days(index: number) {
   return now.toISOString();
 }
 
-function buildTicketPayloadVariants(ticket: GeneratedTicket) {
+function buildTicketPayload(ticket: GeneratedTicket) {
   const clientId = asIntegerId(ticket.client_id);
   const userId = asIntegerId(ticket.user_id);
   const ticketTypeId = asIntegerId(ticket.tickettype_id);
@@ -329,8 +329,9 @@ function buildTicketPayloadVariants(ticket: GeneratedTicket) {
   const statusId = asIntegerId(ticket.status_id);
   const categoryId = asIntegerId(ticket.category_1);
 
-  const objectBase = {
+  return [{
     summary: ticket.summary,
+    details_html: ticket.details,
     client_id: clientId ?? ticket.client_id,
     user_id: userId ?? ticket.user_id,
     tickettype_id: ticketTypeId ?? ticket.tickettype_id,
@@ -339,26 +340,7 @@ function buildTicketPayloadVariants(ticket: GeneratedTicket) {
     ...(priorityId !== null ? { priority_id: priorityId } : {}),
     ...(statusId !== null ? { status_id: statusId } : {}),
     ...(categoryId !== null ? { category_1: categoryId } : {}),
-  };
-
-  return [
-    {
-      label: "array-details",
-      body: [{ ...objectBase, details: ticket.details }],
-    },
-    {
-      label: "array-details_html",
-      body: [{ ...objectBase, details_html: ticket.details }],
-    },
-    {
-      label: "object-details",
-      body: { ...objectBase, details: ticket.details },
-    },
-    {
-      label: "object-details_html",
-      body: { ...objectBase, details_html: ticket.details },
-    },
-  ];
+  }];
 }
 
 export default function DemoDataGenerator({
@@ -671,31 +653,15 @@ export default function DemoDataGenerator({
         };
 
         try {
-          let created = false;
-          let lastError = "Unknown error";
-          const payloadVariants = buildTicketPayloadVariants(ticket);
-
-          for (const variant of payloadVariants) {
-            try {
-              await proxyRequest({
-                url: `${RESOURCE_SERVER}/Tickets`,
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${authToken}`,
-                },
-                body: variant.body,
-              });
-              created = true;
-              break;
-            } catch (error) {
-              lastError = error instanceof Error ? error.message : "Unknown error";
-            }
-          }
-
-          if (!created) {
-            throw new Error(lastError);
-          }
+          await proxyRequest({
+            url: `${RESOURCE_SERVER}/Tickets`,
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: buildTicketPayload(ticket),
+          });
 
           setTicketsCreated((prev) => prev + 1);
           appendLog(`✅ [${client.name}] Ticket ${ticketIndex + 1}/10 created — "${template.summary}"`);
