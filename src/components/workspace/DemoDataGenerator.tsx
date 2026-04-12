@@ -182,6 +182,17 @@ function asScalarId(value: unknown): string | number | null {
   return null;
 }
 
+function asIntegerId(value: unknown): number | null {
+  const scalar = asScalarId(value);
+  if (typeof scalar === "number") {
+    return Number.isInteger(scalar) ? scalar : null;
+  }
+  if (typeof scalar === "string" && /^\d+$/.test(scalar)) {
+    return Number(scalar);
+  }
+  return null;
+}
+
 function asLabel(value: unknown): string | undefined {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -233,16 +244,31 @@ function formatError(status: number, payload: unknown) {
 
   if (payload && typeof payload === "object") {
     const record = payload as Record<string, unknown>;
+    const arrayMessages = Object.entries(record).flatMap(([key, value]) => {
+      if (!Array.isArray(value)) return [] as string[];
+
+      return value.flatMap((item) => {
+        if (typeof item === "string" && item.trim()) {
+          return [key === "summary" ? item : `${key}: ${item}`];
+        }
+
+        if (item && typeof item === "object") {
+          const detail = (item as Record<string, unknown>).detail;
+          if (typeof detail === "string" && detail.trim()) {
+            return [key === "errors" ? detail : `${key}: ${detail}`];
+          }
+        }
+
+        return [] as string[];
+      });
+    });
+
     const detail =
       (typeof record.error_description === "string" && record.error_description) ||
       (typeof record.message === "string" && record.message) ||
       (typeof record.error === "string" && record.error) ||
       (typeof record.response_text === "string" && record.response_text) ||
-      (Array.isArray(record.errors) &&
-        typeof record.errors[0] === "object" &&
-        record.errors[0] &&
-        typeof (record.errors[0] as Record<string, unknown>).detail === "string" &&
-        ((record.errors[0] as Record<string, unknown>).detail as string)) ||
+      arrayMessages.find(Boolean) ||
       Object.keys(record)
         .filter((key) => /^\d+$/.test(key))
         .sort((a, b) => Number(a) - Number(b))
@@ -295,16 +321,24 @@ function isoDateWithinLast90Days(index: number) {
 }
 
 function buildTicketPayloadVariants(ticket: GeneratedTicket) {
+  const clientId = asIntegerId(ticket.client_id);
+  const userId = asIntegerId(ticket.user_id);
+  const ticketTypeId = asIntegerId(ticket.tickettype_id);
+  const agentId = asIntegerId(ticket.agent_id);
+  const priorityId = asIntegerId(ticket.priority_id);
+  const statusId = asIntegerId(ticket.status_id);
+  const categoryId = asIntegerId(ticket.category_1);
+
   const objectBase = {
     summary: ticket.summary,
-    client_id: ticket.client_id,
-    user_id: ticket.user_id,
-    tickettype_id: ticket.tickettype_id,
+    client_id: clientId ?? ticket.client_id,
+    user_id: userId ?? ticket.user_id,
+    tickettype_id: ticketTypeId ?? ticket.tickettype_id,
     dateoccurred: ticket.dateoccurred,
-    ...(ticket.agent_id ? { agent_id: ticket.agent_id } : {}),
-    ...(ticket.priority_id ? { priority_id: ticket.priority_id } : {}),
-    ...(ticket.status_id ? { status_id: ticket.status_id } : {}),
-    ...(ticket.category_1 ? { category_1: ticket.category_1 } : {}),
+    ...(agentId !== null ? { agent_id: agentId } : {}),
+    ...(priorityId !== null ? { priority_id: priorityId } : {}),
+    ...(statusId !== null ? { status_id: statusId } : {}),
+    ...(categoryId !== null ? { category_1: categoryId } : {}),
   };
 
   return [
