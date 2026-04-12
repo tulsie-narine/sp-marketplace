@@ -653,31 +653,15 @@ export default function DemoDataGenerator({
         };
 
         try {
-          let created = false;
-          let lastError = "Unknown error";
-          const payloadVariants = buildTicketPayloadVariants(ticket);
-
-          for (const variant of payloadVariants) {
-            try {
-              await proxyRequest({
-                url: `${RESOURCE_SERVER}/Tickets`,
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${authToken}`,
-                },
-                body: variant.body,
-              });
-              created = true;
-              break;
-            } catch (error) {
-              lastError = error instanceof Error ? error.message : "Unknown error";
-            }
-          }
-
-          if (!created) {
-            throw new Error(lastError);
-          }
+          await proxyRequest({
+            url: `${RESOURCE_SERVER}/Tickets`,
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: buildTicketPayload(ticket),
+          });
 
           setTicketsCreated((prev) => prev + 1);
           appendLog(`✅ [${client.name}] Ticket ${ticketIndex + 1}/10 created — "${template.summary}"`);
