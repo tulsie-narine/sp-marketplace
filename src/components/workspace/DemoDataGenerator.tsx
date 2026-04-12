@@ -54,6 +54,16 @@ interface Status {
 }
 
 interface ExistingTicket extends Record<string, unknown> {}
+interface TicketPattern {
+  tickettype_id: string | number;
+  tickettype_name?: string;
+  category_1?: string | number;
+  category_name?: string;
+  priority_id?: string | number;
+  priority_name?: string;
+  status_id?: string | number;
+  status_name?: string;
+}
 
 interface GeneratedTicket {
   tickettype_id: number | string;
@@ -237,6 +247,92 @@ function deriveOptions<T extends { id: string | number; name?: string }>(
   return Array.from(results.values());
 }
 
+function deriveTicketPatterns(tickets: ExistingTicket[]): TicketPattern[] {
+  const patterns = new Map<string, TicketPattern>();
+
+  for (const ticket of tickets) {
+    const ticketTypeId =
+      asScalarId(ticket.tickettype_id) ??
+      asScalarId(ticket.type_id);
+    if (ticketTypeId === null) continue;
+
+    const ticketTypeName =
+      asLabel(ticket.tickettypename) ||
+      asLabel(ticket.tickettype) ||
+      asLabel(ticket.type) ||
+      asLabel(ticket.typename);
+
+    const categoryId =
+      asScalarId(ticket.category_1) ??
+      asScalarId(ticket.category1_id) ??
+      asScalarId(ticket.category_id);
+    const categoryName =
+      asLabel(ticket.category_1_name) ||
+      asLabel(ticket.category1name) ||
+      asLabel(ticket.category) ||
+      asLabel(ticket.categoryname);
+
+    const priorityId = asScalarId(ticket.priority_id);
+    const priorityName =
+      asLabel(ticket.priority_name) ||
+      asLabel(ticket.priority) ||
+      asLabel(ticket.priorityname);
+
+    const statusId = asScalarId(ticket.status_id);
+    const statusName =
+      asLabel(ticket.status_name) ||
+      asLabel(ticket.status) ||
+      asLabel(ticket.statusname);
+
+    const key = `${ticketTypeId}::${categoryId ?? "none"}`;
+    if (!patterns.has(key)) {
+      patterns.set(key, {
+        tickettype_id: ticketTypeId,
+        ...(ticketTypeName ? { tickettype_name: ticketTypeName } : {}),
+        ...(categoryId !== null ? { category_1: categoryId } : {}),
+        ...(categoryName ? { category_name: categoryName } : {}),
+        ...(priorityId !== null ? { priority_id: priorityId } : {}),
+        ...(priorityName ? { priority_name: priorityName } : {}),
+        ...(statusId !== null ? { status_id: statusId } : {}),
+        ...(statusName ? { status_name: statusName } : {}),
+      });
+    }
+  }
+
+  return Array.from(patterns.values());
+}
+
+function scoreTicketPattern(pattern: TicketPattern) {
+  const text = `${pattern.tickettype_name || ""} ${pattern.category_name || ""}`.toLowerCase();
+  let score = 0;
+
+  if (
+    text.includes("incident") ||
+    text.includes("alert") ||
+    text.includes("issue") ||
+    text.includes("support") ||
+    text.includes("scheduled task")
+  ) {
+    score += 3;
+  }
+
+  if (
+    text.includes("request") ||
+    text.includes("onboarding") ||
+    text.includes("mobile") ||
+    text.includes("hardware") ||
+    text.includes("printer") ||
+    text.includes("peripheral") ||
+    text.includes("asset") ||
+    text.includes("new starter") ||
+    text.includes("change request")
+  ) {
+    score -= 4;
+  }
+
+  return score;
+}
+
 function formatError(status: number, payload: unknown) {
   if (typeof payload === "string" && payload.trim()) {
     return `${status} ${payload}`;
@@ -365,6 +461,7 @@ export default function DemoDataGenerator({
   const [agents, setAgents] = useState<Agent[]>([]);
   const [priorities, setPriorities] = useState<Priority[]>([]);
   const [statuses, setStatuses] = useState<Status[]>([]);
+  const [ticketPatterns, setTicketPatterns] = useState<TicketPattern[]>([]);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [ticketsCreated, setTicketsCreated] = useState(0);
   const [totalTickets, setTotalTickets] = useState(0);
@@ -497,6 +594,7 @@ export default function DemoDataGenerator({
       const nextUsers = usersResult.data;
       const warnings: string[] = [];
       const recentTickets = ticketsResult.data;
+      const derivedPatterns = deriveTicketPatterns(recentTickets);
       let nextTicketTypes = ticketTypesResult.data;
       let nextCategories = categoriesResult.data;
       let nextAgents = agentsResult.data;
@@ -550,6 +648,13 @@ export default function DemoDataGenerator({
         }
       }
 
+      const preferredPatterns = [...derivedPatterns]
+        .sort((a, b) => scoreTicketPattern(b) - scoreTicketPattern(a))
+        .slice(0, 10);
+      if (preferredPatterns.length > 0) {
+        warnings.push(`Using ${preferredPatterns.length} ticket patterns derived from existing tickets to avoid request forms with extra mandatory fields.`);
+      }
+
       setDiscoveryProbeLog({
         clients: clientsResult.attempts,
         users: usersResult.attempts,
@@ -578,6 +683,7 @@ export default function DemoDataGenerator({
       setAgents(nextAgents);
       setPriorities(nextPriorities);
       setStatuses(nextStatuses);
+      setTicketPatterns(preferredPatterns);
       setDiscoveryWarnings(warnings);
       setTotalTickets(nextClients.length * 10);
       setLogLines([]);
@@ -612,6 +718,7 @@ export default function DemoDataGenerator({
     const safeAgents = agents;
     const safePriorities = priorities;
     const safeStatuses = statuses;
+    const safePatterns = ticketPatterns;
 
     for (let clientIndex = 0; clientIndex < clients.length; clientIndex += 1) {
       const client = clients[clientIndex];
@@ -631,15 +738,26 @@ export default function DemoDataGenerator({
         appendLog(`⏳ [${client.name}] Creating ticket ${ticketIndex + 1}/10...`);
 
         const user = clientUsers[Math.floor(Math.random() * clientUsers.length)];
+        const pattern = safePatterns.length
+          ? safePatterns[(clientIndex + ticketIndex) % safePatterns.length]
+          : null;
         const agent = safeAgents.length
           ? safeAgents[(clientIndex + ticketIndex) % safeAgents.length]
           : null;
-        const ticketType = safeTicketTypes[(clientIndex + ticketIndex) % safeTicketTypes.length];
-        const category = safeCategories[(clientIndex + ticketIndex) % safeCategories.length];
-        const priority = safePriorities.length
+        const ticketType = pattern
+          ? { id: pattern.tickettype_id, name: pattern.tickettype_name }
+          : safeTicketTypes[(clientIndex + ticketIndex) % safeTicketTypes.length];
+        const category = pattern?.category_1
+          ? { id: pattern.category_1, name: pattern.category_name }
+          : safeCategories[(clientIndex + ticketIndex) % safeCategories.length];
+        const priority = pattern?.priority_id
+          ? { id: pattern.priority_id, name: pattern.priority_name }
+          : safePriorities.length
           ? safePriorities[(ticketIndex + clientIndex) % safePriorities.length]
           : null;
-        const status = safeStatuses.length
+        const status = pattern?.status_id
+          ? { id: pattern.status_id, name: pattern.status_name }
+          : safeStatuses.length
           ? safeStatuses[(ticketIndex * 2 + clientIndex) % safeStatuses.length]
           : null;
 
@@ -697,7 +815,7 @@ export default function DemoDataGenerator({
     }
 
     setPanelPhase("complete");
-  }, [agents, appendLog, authToken, categories, clients, priorities, statuses, ticketTypes, users]);
+  }, [agents, appendLog, authToken, categories, clients, priorities, statuses, ticketPatterns, ticketTypes, users]);
 
   const resetState = useCallback(() => {
     setModalOpen(false);
@@ -713,6 +831,7 @@ export default function DemoDataGenerator({
     setAgents([]);
     setPriorities([]);
     setStatuses([]);
+    setTicketPatterns([]);
     setLogLines([]);
     setTicketsCreated(0);
     setTotalTickets(0);
