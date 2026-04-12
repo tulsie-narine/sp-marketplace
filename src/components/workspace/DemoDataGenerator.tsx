@@ -320,7 +320,7 @@ function isoDateWithinLast90Days(index: number) {
   return now.toISOString();
 }
 
-function buildTicketPayload(ticket: GeneratedTicket) {
+function buildTicketPayload(ticket: GeneratedTicket, omitCategory = false) {
   const clientId = asIntegerId(ticket.client_id);
   const userId = asIntegerId(ticket.user_id);
   const ticketTypeId = asIntegerId(ticket.tickettype_id);
@@ -332,6 +332,10 @@ function buildTicketPayload(ticket: GeneratedTicket) {
   return [{
     summary: ticket.summary,
     details_html: ticket.details,
+    details: ticket.details,
+    request_details: ticket.details,
+    justification: "Demo data — auto-generated ticket",
+    peripherals: "N/A",
     client_id: clientId ?? ticket.client_id,
     user_id: userId ?? ticket.user_id,
     tickettype_id: ticketTypeId ?? ticket.tickettype_id,
@@ -339,7 +343,7 @@ function buildTicketPayload(ticket: GeneratedTicket) {
     ...(agentId !== null ? { agent_id: agentId } : {}),
     ...(priorityId !== null ? { priority_id: priorityId } : {}),
     ...(statusId !== null ? { status_id: statusId } : {}),
-    ...(categoryId !== null ? { category_1: categoryId } : {}),
+    ...(!omitCategory && categoryId !== null ? { category_1: categoryId } : {}),
   }];
 }
 
