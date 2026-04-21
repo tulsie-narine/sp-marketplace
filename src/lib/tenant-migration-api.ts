@@ -1919,12 +1919,17 @@ async function migrateRecord(
     const templateId = asText(record.assessment_template_id);
     const preferredEvaluatorEmail =
       actionItemAssigneeEmail || extractAssessmentEvaluatorEmail(record) || null;
+    const sourceEvaluateUserId = asText(record.evaluate_user_id) || null;
     const evaluatorUserId =
       findDestinationMemberIdByEmail(destinationMembers, preferredEvaluatorEmail) ||
       (await findDestinationMemberIdByEmailViaApi(
         destinationApiKey,
         preferredEvaluatorEmail
-      ));
+      )) ||
+      // Same-tenant clone fallback: the source evaluate_user_id is valid in the
+      // destination tenant because it IS the destination tenant. Cross-tenant
+      // calls will surface an upstream error if the id is unknown there.
+      sourceEvaluateUserId;
 
     if (!templateId) {
       throw new Error(
