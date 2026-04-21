@@ -271,7 +271,6 @@ export function LcmDataResetWorkspace() {
     () => Object.values(selectedObjects).filter(Boolean).length,
     [selectedObjects]
   );
-  const requiresAssigneeEmail = selectedObjects.actionItems;
   const hasConfirmation = confirmationText.trim().toUpperCase() === RESET_CONFIRM_TEXT;
   const completedClients = useMemo(
     () => progressList.filter((item) => item.stage === "complete").length,
