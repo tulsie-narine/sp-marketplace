@@ -230,9 +230,13 @@ export function LcmDataResetWorkspace() {
   }, [sourceClients, sourceSearch]);
   const filteredDestinationClients = useMemo(() => {
     const query = destinationSearch.trim().toLowerCase();
-    if (!query) return destinationClients;
-    return destinationClients.filter((client) => client.name.toLowerCase().includes(query));
-  }, [destinationClients, destinationSearch]);
+    const base =
+      tenantMode === "same" && selectedSourceClientId
+        ? destinationClients.filter((client) => client.id !== selectedSourceClientId)
+        : destinationClients;
+    if (!query) return base;
+    return base.filter((client) => client.name.toLowerCase().includes(query));
+  }, [destinationClients, destinationSearch, tenantMode, selectedSourceClientId]);
   const sourceTotalPages = Math.max(1, Math.ceil(filteredSourceClients.length / PAGE_SIZE));
   const destinationTotalPages = Math.max(
     1,
