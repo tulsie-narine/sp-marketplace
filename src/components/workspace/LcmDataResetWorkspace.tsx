@@ -178,7 +178,6 @@ export function LcmDataResetWorkspace() {
   const [selectedObjects, setSelectedObjects] = useState<SelectedObjects>(
     DEFAULT_RESET_SELECTED_OBJECTS
   );
-  const [actionItemAssigneeEmail, setActionItemAssigneeEmail] = useState("");
   const [confirmationText, setConfirmationText] = useState("");
   const [sourceSearch, setSourceSearch] = useState("");
   const [destinationSearch, setDestinationSearch] = useState("");
