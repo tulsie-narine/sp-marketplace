@@ -460,38 +460,93 @@ export function LcmDataResetWorkspace() {
           </div>
         </div>
 
+        <div className="mb-6">
+          <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Clone Mode
+          </label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setTenantMode("cross")}
+              className={classNames(
+                "rounded-md border p-3 text-left transition-colors",
+                tenantMode === "cross"
+                  ? "border-primary bg-primary/10"
+                  : "border-border bg-surface-raised/40 hover:bg-surface-raised"
+              )}
+            >
+              <p className="text-sm font-medium text-foreground">Cross-tenant clone</p>
+              <p className="text-xs text-muted-foreground">
+                Source client lives in a different tenant. Requires a source tenant API key.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTenantMode("same")}
+              className={classNames(
+                "rounded-md border p-3 text-left transition-colors",
+                tenantMode === "same"
+                  ? "border-primary bg-primary/10"
+                  : "border-border bg-surface-raised/40 hover:bg-surface-raised"
+              )}
+            >
+              <p className="text-sm font-medium text-foreground">Same-tenant clone (gold client)</p>
+              <p className="text-xs text-muted-foreground">
+                Pick a gold client inside the connected tenant and replicate it to other clients in the same tenant.
+              </p>
+            </button>
+          </div>
+        </div>
+
         <div className="grid gap-4 md:grid-cols-2">
           <div className="rounded-lg border border-success/20 bg-success/5 p-4">
             <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Destination Tenant (connected)
+              {tenantMode === "same" ? "Tenant (connected)" : "Destination Tenant (connected)"}
             </label>
             <p className="font-mono text-sm text-foreground">
               {destinationApiKey ? "Connected via session API key" : "Not connected"}
             </p>
           </div>
 
-          <div className="rounded-lg border border-border bg-surface-raised/50 p-4">
-            <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Source Tenant API Key
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="password"
-                value={sourceApiKey}
-                onChange={(event) => setSourceApiKey(event.target.value)}
-                placeholder="Paste the source tenant API key"
-                className="h-10 flex-1 rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-              <button
-                onClick={loadSourceClients}
-                disabled={loadingSourceClients}
-                className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {loadingSourceClients && <Loader2 className="h-4 w-4 animate-spin" />}
-                Load
-              </button>
+          {tenantMode === "cross" ? (
+            <div className="rounded-lg border border-border bg-surface-raised/50 p-4">
+              <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Source Tenant API Key
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={sourceApiKey}
+                  onChange={(event) => setSourceApiKey(event.target.value)}
+                  placeholder="Paste the source tenant API key"
+                  className="h-10 flex-1 rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <button
+                  onClick={loadSourceClients}
+                  disabled={loadingSourceClients}
+                  className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {loadingSourceClients && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Load
+                </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="rounded-lg border border-border bg-surface-raised/50 p-4">
+              <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Source = Destination Tenant
+              </label>
+              <p className="text-sm text-foreground">
+                Source clients are loaded from the connected tenant. Pick the gold client below.
+              </p>
+              {loadingDestinationClients && (
+                <p className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Loading clients...
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {sourceError && (
