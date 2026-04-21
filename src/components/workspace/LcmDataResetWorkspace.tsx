@@ -215,6 +215,24 @@ export function LcmDataResetWorkspace() {
     loadDestinationClients();
   }, [destinationApiKey]);
 
+  // In same-tenant mode, the source clients are the same list as destination clients.
+  useEffect(() => {
+    if (tenantMode !== "same") return;
+    setSourceClients(destinationClients);
+    setSourceError(null);
+  }, [tenantMode, destinationClients]);
+
+  // When switching modes, clear selections so users explicitly re-pick.
+  useEffect(() => {
+    setSelectedSourceClientId("");
+    setSelectedDestinationIds(new Set());
+    if (tenantMode === "same") {
+      setSourceApiKey("");
+    } else {
+      setSourceClients([]);
+    }
+  }, [tenantMode]);
+
   const selectedSourceClient = useMemo(
     () => sourceClients.find((client) => client.id === selectedSourceClientId) || null,
     [sourceClients, selectedSourceClientId]
