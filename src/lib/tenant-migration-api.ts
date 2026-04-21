@@ -1969,6 +1969,134 @@ async function migrateRecord(
       body
     );
 
+    // Replay answers from the source assessment by mapping
+    // assessment_template_question_id -> destination question id, and
+    // assessment_template_criterion_id -> destination criterion id.
+    let answersReplayed = 0;
+    let answersUnmapped = 0;
+    let replayErrorMessage: string | null = null;
+    try {
+      const sourceQuestionEvaluations: {
+        templateQuestionId: string;
+        templateCriterionId: string;
+      }[] = [];
+
+      const sourceCategories = Array.isArray(record.category_list)
+        ? record.category_list
+        : [];
+      for (const category of sourceCategories) {
+        if (!isRecord(category)) continue;
+        const questions = Array.isArray(category.question_list)
+          ? category.question_list
+          : [];
+        for (const question of questions) {
+          if (!isRecord(question)) continue;
+          const templateQuestionId = asText(
+            question.assessment_template_question_id
+          );
+          if (!templateQuestionId) continue;
+          const criteria = Array.isArray(question.criteria_list)
+            ? question.criteria_list
+            : [];
+          const selected = criteria.find(
+            (c) => isRecord(c) && c.is_selected === true
+          );
+          if (!selected || !isRecord(selected)) continue;
+          const templateCriterionId = asText(
+            selected.assessment_template_criterion_id
+          );
+          if (!templateCriterionId) continue;
+          sourceQuestionEvaluations.push({
+            templateQuestionId,
+            templateCriterionId,
+          });
+        }
+      }
+
+      if (sourceQuestionEvaluations.length > 0) {
+        await sleep(DEFAULT_DELAY_MS);
+        const destinationDetail = await proxyCallWithRetry<Record<string, any>>(
+          destinationApiKey,
+          `/lifecycle-manager/v1/assessments/${created.id}`
+        );
+        const destinationAssessment =
+          (isRecord(destinationDetail.assessment) &&
+            destinationDetail.assessment) ||
+          destinationDetail;
+
+        const destQuestionByTemplateId = new Map<string, string>();
+        const destCriterionByTemplateId = new Map<string, Map<string, string>>();
+
+        const destCategories = Array.isArray(destinationAssessment.category_list)
+          ? destinationAssessment.category_list
+          : [];
+        for (const category of destCategories) {
+          if (!isRecord(category)) continue;
+          const questions = Array.isArray(category.question_list)
+            ? category.question_list
+            : [];
+          for (const question of questions) {
+            if (!isRecord(question)) continue;
+            const tplQId = asText(question.assessment_template_question_id);
+            const qId = asText(question.assessment_question_id);
+            if (!tplQId || !qId) continue;
+            destQuestionByTemplateId.set(tplQId, qId);
+
+            const criteriaMap = new Map<string, string>();
+            const criteria = Array.isArray(question.criteria_list)
+              ? question.criteria_list
+              : [];
+            for (const criterion of criteria) {
+              if (!isRecord(criterion)) continue;
+              const tplCId = asText(criterion.assessment_template_criterion_id);
+              const cId = asText(criterion.assessment_criterion_id);
+              if (!tplCId || !cId) continue;
+              criteriaMap.set(tplCId, cId);
+            }
+            destCriterionByTemplateId.set(tplQId, criteriaMap);
+          }
+        }
+
+        const questionEvaluations: {
+          question_id: string;
+          selected_criteria_id: string;
+        }[] = [];
+        for (const entry of sourceQuestionEvaluations) {
+          const destQuestionId = destQuestionByTemplateId.get(
+            entry.templateQuestionId
+          );
+          const criteriaMap = destCriterionByTemplateId.get(
+            entry.templateQuestionId
+          );
+          const destCriterionId = criteriaMap?.get(entry.templateCriterionId);
+          if (destQuestionId && destCriterionId) {
+            questionEvaluations.push({
+              question_id: destQuestionId,
+              selected_criteria_id: destCriterionId,
+            });
+          } else {
+            answersUnmapped += 1;
+          }
+        }
+
+        if (questionEvaluations.length > 0) {
+          await sleep(DEFAULT_DELAY_MS);
+          await proxyCallWithRetry(
+            destinationApiKey,
+            `/lifecycle-manager/v1/assessments/${created.id}/evaluate`,
+            "PUT",
+            { question_evaluations: questionEvaluations }
+          );
+          answersReplayed = questionEvaluations.length;
+        }
+      }
+    } catch (replayError) {
+      replayErrorMessage =
+        replayError instanceof Error
+          ? replayError.message
+          : "Unknown error replaying assessment answers.";
+    }
+
     if (
       asText(record.status) === "Completed" ||
       asText(record.completion_status)
@@ -1982,14 +2110,34 @@ async function migrateRecord(
       );
     }
 
-    warnings.push(
-      buildWarning(
-        destinationClient.name,
-        OBJECT_LABELS.assessments,
-        recordName,
-        "Assessment created. Answers not replayed - requires manual re-evaluation in destination tenant."
-      )
-    );
+    if (replayErrorMessage) {
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.assessments,
+          recordName,
+          `Assessment created but answer replay failed: ${replayErrorMessage}`
+        )
+      );
+    } else if (answersReplayed === 0) {
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.assessments,
+          recordName,
+          "Assessment created. No selected answers were found on the source to replay."
+        )
+      );
+    } else if (answersUnmapped > 0) {
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.assessments,
+          recordName,
+          `Assessment created and ${answersReplayed} answer(s) replayed. ${answersUnmapped} answer(s) could not be mapped to destination questions/criteria.`
+        )
+      );
+    }
 
     return {
       newId: created.id,
