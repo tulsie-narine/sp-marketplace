@@ -376,7 +376,8 @@ export function LcmDataResetWorkspace() {
 
     try {
       const runResult = await runLcmDataReset({
-        sourceApiKey: sourceApiKey.trim(),
+        sourceApiKey:
+          tenantMode === "same" ? destinationApiKey : sourceApiKey.trim(),
         destinationApiKey,
         sourceClient: selectedSourceClient,
         destinationClients: selectedDestinationClients,
