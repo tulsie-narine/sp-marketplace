@@ -163,6 +163,7 @@ export function LcmDataResetWorkspace() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [currentScreen, setCurrentScreen] = useState<Screen>(1);
+  const [tenantMode, setTenantMode] = useState<"cross" | "same">("cross");
   const [sourceApiKey, setSourceApiKey] = useState("");
   const [destinationApiKey] = useState(
     () =>
