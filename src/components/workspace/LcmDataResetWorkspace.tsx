@@ -178,7 +178,6 @@ export function LcmDataResetWorkspace() {
   const [selectedObjects, setSelectedObjects] = useState<SelectedObjects>(
     DEFAULT_RESET_SELECTED_OBJECTS
   );
-  const [actionItemAssigneeEmail, setActionItemAssigneeEmail] = useState("");
   const [confirmationText, setConfirmationText] = useState("");
   const [sourceSearch, setSourceSearch] = useState("");
   const [destinationSearch, setDestinationSearch] = useState("");
@@ -272,7 +271,6 @@ export function LcmDataResetWorkspace() {
     () => Object.values(selectedObjects).filter(Boolean).length,
     [selectedObjects]
   );
-  const requiresAssigneeEmail = selectedObjects.actionItems;
   const hasConfirmation = confirmationText.trim().toUpperCase() === RESET_CONFIRM_TEXT;
   const completedClients = useMemo(
     () => progressList.filter((item) => item.stage === "complete").length,
@@ -350,14 +348,6 @@ export function LcmDataResetWorkspace() {
       });
       return;
     }
-    if (requiresAssigneeEmail && actionItemAssigneeEmail.trim().length === 0) {
-      toast({
-        title: "Action item assignee required",
-        description: "Provide a default assignee email for action items before starting the run.",
-        variant: "destructive",
-      });
-      return;
-    }
     if (!hasConfirmation) {
       toast({
         title: "Confirm the destructive action",
@@ -382,9 +372,6 @@ export function LcmDataResetWorkspace() {
         sourceClient: selectedSourceClient,
         destinationClients: selectedDestinationClients,
         selectedObjects,
-        actionItemAssigneeEmail: selectedObjects.actionItems
-          ? actionItemAssigneeEmail.trim() || null
-          : null,
         onClientProgress: (clientIndex, progress) => {
           setProgressList((prev) => {
             const next = [...prev];
@@ -438,7 +425,6 @@ export function LcmDataResetWorkspace() {
     setSelectedSourceClientId("");
     setSelectedDestinationIds(new Set());
     setSelectedObjects(DEFAULT_RESET_SELECTED_OBJECTS);
-    setActionItemAssigneeEmail("");
     setConfirmationText("");
     setRunError(null);
     setRunning(false);
@@ -794,21 +780,6 @@ export function LcmDataResetWorkspace() {
             </label>
           ))}
         </div>
-
-        {selectedObjects.actionItems && (
-          <div className="mt-5">
-            <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Default Action Item Assignee Email
-            </label>
-            <input
-              type="email"
-              value={actionItemAssigneeEmail}
-              onChange={(event) => setActionItemAssigneeEmail(event.target.value)}
-              placeholder="name@company.com"
-              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-            />
-          </div>
-        )}
       </div>
 
       <div className="rounded-lg border border-warning/30 bg-warning/10 p-4">
@@ -852,7 +823,6 @@ export function LcmDataResetWorkspace() {
           onClick={startRun}
           disabled={
             selectedObjectCount === 0 ||
-            (requiresAssigneeEmail && actionItemAssigneeEmail.trim().length === 0) ||
             !hasConfirmation
           }
           className="inline-flex items-center gap-2 rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-40"
