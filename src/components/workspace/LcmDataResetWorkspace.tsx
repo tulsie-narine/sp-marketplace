@@ -596,6 +596,70 @@ export function LcmDataResetWorkspace() {
 
   const renderScreenOne = () => (
     <div className="space-y-4">
+      <div className="rounded-lg border border-border bg-card p-5">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-heading text-lg font-bold text-foreground">
+              Saved Configurations
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              Reuse a saved gold client + destinations setup, or enable a nightly 2:00 AM ET auto-run.
+            </p>
+          </div>
+          {loadingConfigs && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+        </div>
+        {savedConfigs.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No saved configurations yet. Pick clients in same-tenant mode below, then save from the Reset Options screen.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {savedConfigs.map((config) => (
+              <div
+                key={config.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface-raised/40 px-3 py-2 text-xs"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-foreground">{config.name}</p>
+                  <p className="truncate text-[11px] text-muted-foreground">
+                    Source: {config.source_client_name} → {config.destination_client_ids.length} destinations
+                  </p>
+                  {config.last_run_at && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Last run: {new Date(config.last_run_at).toLocaleString()} ({config.last_run_status || "—"})
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={config.schedule_enabled}
+                      onChange={(e) => handleToggleSchedule(config, e.target.checked)}
+                    />
+                    <Clock className="h-3 w-3" />
+                    2 AM ET
+                  </label>
+                  <button
+                    onClick={() => applyConfig(config)}
+                    className="rounded-md border border-border px-2 py-1 text-foreground transition-colors hover:bg-surface-raised"
+                  >
+                    Load
+                  </button>
+                  <button
+                    onClick={() => handleDeleteConfig(config.id)}
+                    className="rounded-md border border-destructive/30 px-2 py-1 text-destructive transition-colors hover:bg-destructive/10"
+                    title="Delete config"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="rounded-lg border border-border bg-card p-6">
         <div className="mb-6 flex items-center gap-4">
           <span className="text-4xl">🧰</span>
