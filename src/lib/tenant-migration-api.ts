@@ -920,63 +920,87 @@ async function fetchActionItemsViaRelationships(
 ): Promise<Record<string, any>[]> {
   const actionItemIds = new Set<string>();
 
-  const initiatives = await fetchAllPages<Record<string, any>>(
-    apiKey,
-    (cursor) => {
-      const params = new URLSearchParams({
-        "filter[client.id]": client.id,
-        page_size: "100",
-      });
-      if (cursor) params.set("cursor", cursor);
-      return `/lifecycle-manager/v1/initiatives?${params.toString()}`;
-    }
-  );
+  let initiatives: Record<string, any>[] = [];
+  try {
+    initiatives = await fetchAllPages<Record<string, any>>(
+      apiKey,
+      (cursor) => {
+        const params = new URLSearchParams({
+          "filter[client.id]": client.id,
+          page_size: "100",
+        });
+        if (cursor) params.set("cursor", cursor);
+        return `/lifecycle-manager/v1/initiatives?${params.toString()}`;
+      }
+    );
+  } catch {
+    initiatives = [];
+  }
 
   for (const initiative of initiatives) {
     const initiativeId = asText(initiative.id);
     if (!initiativeId) continue;
-    const ids = await fetchRelationshipIdList(
-      apiKey,
-      `/lifecycle-manager/v1/initiatives/${initiativeId}/action-items`,
-      "action_item_ids"
-    );
+    let ids: string[] = [];
+    try {
+      ids = await fetchRelationshipIdList(
+        apiKey,
+        `/lifecycle-manager/v1/initiatives/${initiativeId}/action-items`,
+        "action_item_ids"
+      );
+    } catch {
+      ids = [];
+    }
     ids.forEach((id) => actionItemIds.add(id));
   }
 
-  const meetings = await fetchAllPages<Record<string, any>>(
-    apiKey,
-    (cursor) => {
-      const params = new URLSearchParams({
-        "filter[client.id]": client.id,
-        page_size: "100",
-      });
-      if (cursor) params.set("cursor", cursor);
-      return `/lifecycle-manager/v1/meetings?${params.toString()}`;
-    }
-  );
+  let meetings: Record<string, any>[] = [];
+  try {
+    meetings = await fetchAllPages<Record<string, any>>(
+      apiKey,
+      (cursor) => {
+        const params = new URLSearchParams({
+          "filter[client.id]": client.id,
+          page_size: "100",
+        });
+        if (cursor) params.set("cursor", cursor);
+        return `/lifecycle-manager/v1/meetings?${params.toString()}`;
+      }
+    );
+  } catch {
+    meetings = [];
+  }
 
   for (const meeting of meetings) {
     const meetingId = asText(meeting.id);
     if (!meetingId) continue;
-    const ids = await fetchRelationshipIdList(
-      apiKey,
-      `/lifecycle-manager/v1/meetings/${meetingId}/action-items`,
-      "action_item_ids"
-    );
+    let ids: string[] = [];
+    try {
+      ids = await fetchRelationshipIdList(
+        apiKey,
+        `/lifecycle-manager/v1/meetings/${meetingId}/action-items`,
+        "action_item_ids"
+      );
+    } catch {
+      ids = [];
+    }
     ids.forEach((id) => actionItemIds.add(id));
   }
 
   const records: Record<string, any>[] = [];
   for (const actionItemId of actionItemIds) {
     await sleep(DEFAULT_DELAY_MS);
-    const detailResponse = await proxyCallWithRetry<Record<string, any>>(
-      apiKey,
-      `/lifecycle-manager/v1/action-items/${actionItemId}`
-    );
-    const detailRecord =
-      (isRecord(detailResponse.action_item) && detailResponse.action_item) ||
-      detailResponse;
-    records.push(detailRecord);
+    try {
+      const detailResponse = await proxyCallWithRetry<Record<string, any>>(
+        apiKey,
+        `/lifecycle-manager/v1/action-items/${actionItemId}`
+      );
+      const detailRecord =
+        (isRecord(detailResponse.action_item) && detailResponse.action_item) ||
+        detailResponse;
+      records.push(detailRecord);
+    } catch {
+      continue;
+    }
   }
 
   return records;
