@@ -10,6 +10,9 @@ import {
   Loader2,
   RefreshCcw,
   Search,
+  Save,
+  Trash2,
+  Clock,
   TriangleAlert,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -29,6 +32,13 @@ import {
   type ProgressStatus,
   type SelectedObjects,
 } from "@/lib/tenant-migration-api";
+import {
+  deleteConfig,
+  listConfigs,
+  saveConfig,
+  setScheduleEnabled,
+  type LcmDataResetConfig,
+} from "@/lib/lcm-config-api";
 
 const PAGE_SIZE = 8;
 const FINAL_TABS = ["summary", "errors", "relationships"] as const;
