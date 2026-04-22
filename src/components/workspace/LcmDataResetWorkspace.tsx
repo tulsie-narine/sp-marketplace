@@ -214,6 +214,27 @@ export function LcmDataResetWorkspace() {
   useEffect(() => setSourcePage(1), [sourceSearch]);
   useEffect(() => setDestinationPage(1), [destinationSearch]);
 
+  // Load saved configurations on mount
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingConfigs(true);
+    listConfigs()
+      .then((configs) => {
+        if (cancelled) return;
+        setSavedConfigs(configs);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn("Failed to load saved configs", error);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingConfigs(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (!destinationApiKey) return;
     const loadDestinationClients = async () => {
