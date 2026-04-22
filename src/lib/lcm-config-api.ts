@@ -38,9 +38,9 @@ function toRow(input: SaveConfigInput, userId: string) {
     destination_api_key: input.destinationApiKey,
     source_client_id: input.sourceClientId,
     source_client_name: input.sourceClientName,
-    destination_client_ids: input.destinationClientIds,
-    destination_client_names: input.destinationClientNames,
-    selected_objects: input.selectedObjects,
+    destination_client_ids: input.destinationClientIds as unknown as never,
+    destination_client_names: input.destinationClientNames as unknown as never,
+    selected_objects: input.selectedObjects as unknown as never,
     schedule_enabled: input.scheduleEnabled,
   };
 }
