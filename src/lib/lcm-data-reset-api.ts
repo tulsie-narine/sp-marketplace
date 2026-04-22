@@ -92,7 +92,7 @@ export const DEFAULT_RESET_SELECTED_OBJECTS: SelectedObjects = {
   notes: true,
   actionItems: true,
   contracts: true,
-  assessments: false,
+  assessments: true,
   meetings: true,
   deliverables: true,
 };

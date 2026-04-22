@@ -521,12 +521,28 @@ function extractFirstEmail(items: unknown): string | null {
 function extractActionItemAssigneeEmail(record: Record<string, any>) {
   return (
     asText(record.assigned_user?.email) ||
+    asText(record.owner?.email) ||
     asText(record.assigned_user_email) ||
     asText(record.assignee?.email) ||
     asText(record.assignee_email) ||
     extractFirstEmail(record.assigned_user_ids) ||
     extractFirstEmail(record.assigned_users) ||
     extractFirstEmail(record.assignees) ||
+    null
+  );
+}
+
+function extractActionItemAssigneeId(record: Record<string, any>) {
+  return (
+    asText(record.assigned_user?.id) ||
+    asText(record.owner?.id) ||
+    asText(record.assignee?.id) ||
+    asText(record.assigned_user_id) ||
+    asText(record.owner_id) ||
+    asText(record.assignee_id) ||
+    extractIds(record.assigned_user_ids)[0] ||
+    extractIds(record.assigned_users)[0] ||
+    extractIds(record.assignees)[0] ||
     null
   );
 }
@@ -1586,7 +1602,12 @@ async function fetchObjectRecords(
     }
   );
 
-  if (type !== "assessments" && type !== "meetings" && type !== "contracts") {
+  if (
+    type !== "assessments" &&
+    type !== "meetings" &&
+    type !== "contracts" &&
+    type !== "actionItems"
+  ) {
     return list;
   }
 
@@ -1604,6 +1625,9 @@ async function fetchObjectRecords(
       (type === "contracts" &&
         isRecord(detailResponse.contract) &&
         detailResponse.contract) ||
+      (type === "actionItems" &&
+        isRecord(detailResponse.action_item) &&
+        detailResponse.action_item) ||
       (type === "assessments" &&
         isRecord(detailResponse.assessment) &&
         detailResponse.assessment) ||
@@ -1793,23 +1817,27 @@ async function migrateRecord(
   }
 
   if (type === "actionItems") {
-    const assigneeEmail =
+    const sourceAssigneeId = extractActionItemAssigneeId(record);
+    const sourceAssigneeEmail =
       extractActionItemAssigneeEmail(record) || actionItemAssigneeEmail || null;
     const matchedUserId =
-      findDestinationMemberIdByEmail(destinationMembers, assigneeEmail) ||
+      findDestinationMemberIdByEmail(destinationMembers, sourceAssigneeEmail) ||
       (await findDestinationMemberIdByEmailViaApi(
         destinationApiKey,
-        assigneeEmail
-      ));
+        sourceAssigneeEmail
+      )) ||
+      sourceAssigneeId;
 
-    if (!assigneeEmail) {
+    if (!matchedUserId && !sourceAssigneeEmail) {
       throw new Error("Skipped - no assignee available.");
     }
 
     const body = {
       client_key: { id: destinationClientId },
       description: asText(record.description) || "Migrated action item",
-      assigned_user_ids: [{ email: assigneeEmail }],
+      assigned_user_ids: matchedUserId
+        ? [matchedUserId]
+        : [{ email: sourceAssigneeEmail }],
       due_at: normalizeDueAt(record.due_at),
     };
 
@@ -1839,13 +1867,9 @@ async function migrateRecord(
         clientName: destinationClient.name,
         objectType: OBJECT_LABELS.actionItems,
         recordName,
-        resolvedEmail: assigneeEmail,
+        resolvedEmail: sourceAssigneeEmail,
         resolvedUserId: matchedUserId,
-        sourceUserId:
-          asText(record.assigned_user?.id) ||
-          asText(record.assignee?.id) ||
-          asText(record.assigned_user_id) ||
-          null,
+        sourceUserId: sourceAssigneeId,
         note: "Action Item assignee resolution",
       },
     };

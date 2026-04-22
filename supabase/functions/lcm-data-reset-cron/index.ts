@@ -142,7 +142,10 @@ const CLEANUP_ENDPOINTS: Record<keyof SelectedObjects, { list: (clientId: string
     list: (c) => `/lifecycle-manager/v1/deliverables?client_id=${c}`,
     del: (id) => `/lifecycle-manager/v1/deliverables/${id}`,
   },
-  assessments: null, // intentionally not supported in nightly cron
+  assessments: {
+    list: (c) => `/lifecycle-manager/v1/assessments?client_id=${c}`,
+    del: (id) => `/lifecycle-manager/v1/assessments/${id}`,
+  },
 };
 
 async function deleteClientSection(
@@ -169,6 +172,38 @@ async function deleteClientSection(
 // --------- Recreation (copy from source -> dest, minimal but faithful) ---------
 
 const asText = (v: unknown): string => (typeof v === "string" ? v : v == null ? "" : String(v));
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const extractIdArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (isRecord(item)) return asText(item.id);
+      return "";
+    })
+    .filter(Boolean);
+};
+
+const extractActionItemOwnerEmail = (record: Record<string, unknown>) =>
+  asText((record.assigned_user as Record<string, unknown> | undefined)?.email) ||
+  asText((record.owner as Record<string, unknown> | undefined)?.email) ||
+  asText(record.assigned_user_email) ||
+  asText((record.assignee as Record<string, unknown> | undefined)?.email) ||
+  asText(record.assignee_email) ||
+  "";
+
+const extractActionItemOwnerId = (record: Record<string, unknown>) =>
+  asText((record.assigned_user as Record<string, unknown> | undefined)?.id) ||
+  asText((record.owner as Record<string, unknown> | undefined)?.id) ||
+  asText(record.assigned_user_id) ||
+  asText((record.assignee as Record<string, unknown> | undefined)?.id) ||
+  asText(record.assignee_id) ||
+  extractIdArray(record.assigned_user_ids)[0] ||
+  extractIdArray(record.assigned_users)[0] ||
+  extractIdArray(record.assignees)[0] ||
+  "";
 
 async function fetchSourceRecords(
   apiKey: string,
@@ -177,7 +212,41 @@ async function fetchSourceRecords(
 ): Promise<Record<string, unknown>[]> {
   const ep = CLEANUP_ENDPOINTS[type];
   if (!ep) return [];
-  return fetchAllPages(apiKey, ep.list(clientId));
+  const list = await fetchAllPages(apiKey, ep.list(clientId));
+
+  if (type !== "actionItems" && type !== "assessments") {
+    return list;
+  }
+
+  const detailBase = ep.list(clientId).split("?")[0];
+  const detailed: Record<string, unknown>[] = [];
+  for (const item of list) {
+    const id = asText(item.id) || asText(item.uuid);
+    if (!id) {
+      detailed.push(item);
+      continue;
+    }
+
+    const detailResponse = await spCallRetry(
+      apiKey,
+      `${detailBase}/${encodeURIComponent(id)}`,
+      "GET",
+    );
+    const detailData = isRecord(detailResponse.data) ? detailResponse.data : {};
+    const detailRecord =
+      (type === "actionItems" &&
+        isRecord(detailData.action_item) &&
+        detailData.action_item) ||
+      (type === "assessments" &&
+        isRecord(detailData.assessment) &&
+        detailData.assessment) ||
+      detailData;
+
+    detailed.push({ ...item, ...detailRecord });
+    await sleep(50);
+  }
+
+  return detailed;
 }
 
 async function recreate(
@@ -215,16 +284,13 @@ async function recreate(
     return r.status >= 200 && r.status < 300;
   }
   if (type === "actionItems") {
-    const assignedEmail =
-      ((record.assigned_user as Record<string, unknown>)?.email as string) ||
-      (record.assigned_user_email as string) ||
-      ((record.assignee as Record<string, unknown>)?.email as string) ||
-      null;
-    if (!assignedEmail) return false;
+    const assignedUserId = extractActionItemOwnerId(record);
+    const assignedEmail = extractActionItemOwnerEmail(record);
+    if (!assignedUserId && !assignedEmail) return false;
     const body: Record<string, unknown> = {
       client_key: clientKey,
       description: asText(record.description) || "Migrated action item",
-      assigned_user_ids: [{ email: assignedEmail }],
+      assigned_user_ids: assignedUserId ? [assignedUserId] : [{ email: assignedEmail }],
       due_at: record.due_at || null,
     };
     const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/action-items", "POST", body);
@@ -255,6 +321,49 @@ async function recreate(
     const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/deliverables", "POST", body);
     return r.status >= 200 && r.status < 300;
   }
+  if (type === "assessments") {
+    const templateId = asText(record.assessment_template_id);
+    const evaluatorId =
+      asText(record.evaluate_user_id) ||
+      asText((record.evaluate_user as Record<string, unknown> | undefined)?.id) ||
+      asText((record.evaluator as Record<string, unknown> | undefined)?.id);
+    if (!templateId || !evaluatorId) return false;
+
+    const body: Record<string, unknown> = {
+      client_key: clientKey,
+      title: asText(record.title) || "Migrated Assessment",
+      assessment_template_id: templateId,
+      evaluate_user_id: evaluatorId,
+      evaluate_at: record.evaluate_at || record.record_updated_at || new Date().toISOString(),
+    };
+    const created = await spCallRetry(
+      apiKey,
+      "/lifecycle-manager/v1/assessments",
+      "POST",
+      body,
+    );
+    const createdData = isRecord(created.data) ? created.data : {};
+    const createdId =
+      asText((createdData.assessment as Record<string, unknown> | undefined)?.id) ||
+      asText(createdData.id);
+    if (!(created.status >= 200 && created.status < 300) || !createdId) {
+      return false;
+    }
+
+    const shouldComplete =
+      asText(record.status) === "Completed" || Boolean(record.completion_status);
+    if (shouldComplete) {
+      await sleep(DEFAULT_DELAY_MS);
+      await spCallRetry(
+        apiKey,
+        `/lifecycle-manager/v1/assessments/${createdId}/completion-status`,
+        "PUT",
+        { is_completed: true },
+      );
+    }
+
+    return true;
+  }
   return false;
 }
 
@@ -268,7 +377,7 @@ async function runConfig(supabaseAdmin: ReturnType<typeof createClient>, cfg: Co
   // Pre-fetch source records once per object type
   const sourceData: Partial<Record<keyof SelectedObjects, Record<string, unknown>[]>> = {};
   const types = Object.entries(cfg.selected_objects)
-    .filter(([k, v]) => v && k !== "assessments")
+    .filter(([, v]) => v)
     .map(([k]) => k as keyof SelectedObjects);
 
   for (const type of types) {
