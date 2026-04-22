@@ -2033,6 +2033,7 @@ async function migrateRecord(
 
   if (type === "actionItems") {
     const sourceAssigneeIds = extractActionItemAssigneeIds(record);
+    const completionStatus = asText(record.completion_status) || "";
     const sourceAssigneeEmails = [
       ...new Set(
         [
@@ -2083,7 +2084,7 @@ async function migrateRecord(
     if (
       record.is_completed === true ||
       Boolean(record.completed_at) ||
-      asText(record.completion_status).length > 0
+      completionStatus.length > 0
     ) {
       await sleep(DEFAULT_DELAY_MS);
       await proxyCallWithRetry(
@@ -2094,7 +2095,7 @@ async function migrateRecord(
           is_completed:
             record.is_completed === true ||
             Boolean(record.completed_at) ||
-            asText(record.completion_status).toLowerCase() === "completed",
+            completionStatus.toLowerCase() === "completed",
         }
       );
     }
