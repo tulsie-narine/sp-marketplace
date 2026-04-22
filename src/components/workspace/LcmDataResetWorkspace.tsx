@@ -203,6 +203,14 @@ export function LcmDataResetWorkspace() {
   const [result, setResult] = useState<LcmDataResetResult | null>(null);
   const [finalTab, setFinalTab] = useState<FinalTab>("summary");
 
+  // Saved-configuration state (per-user persistence + nightly schedule)
+  const [savedConfigs, setSavedConfigs] = useState<LcmDataResetConfig[]>([]);
+  const [loadingConfigs, setLoadingConfigs] = useState(false);
+  const [activeConfigId, setActiveConfigId] = useState<string | null>(null);
+  const [configName, setConfigName] = useState("Default");
+  const [scheduleNightly, setScheduleNightly] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
+
   useEffect(() => setSourcePage(1), [sourceSearch]);
   useEffect(() => setDestinationPage(1), [destinationSearch]);
 
