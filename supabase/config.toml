@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.app-feedback]
 verify_jwt = false
+
+[functions.lcm-data-reset-cron]
+verify_jwt = false
