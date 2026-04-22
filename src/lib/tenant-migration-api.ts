@@ -133,6 +133,11 @@ interface DestinationMember {
   email: string;
 }
 
+interface SourceMember {
+  id: string;
+  email: string;
+}
+
 interface DestinationMeetingType {
   id: string;
   label: string;
@@ -1293,6 +1298,15 @@ async function fetchDestinationMembers(
   return results;
 }
 
+function findMemberEmailById(
+  members: Array<{ id: string; email: string }>,
+  id: string | null | undefined
+) {
+  const normalizedId = id?.trim();
+  if (!normalizedId) return null;
+  return members.find((member) => member.id === normalizedId)?.email || null;
+}
+
 async function fetchDestinationMeetingTypes(
   apiKey: string
 ): Promise<DestinationMeetingType[]> {
@@ -1809,8 +1823,7 @@ async function fetchObjectRecords(
   if (
     type !== "assessments" &&
     type !== "meetings" &&
-    type !== "contracts" &&
-    type !== "actionItems"
+    type !== "contracts"
   ) {
     return list;
   }
@@ -1829,9 +1842,6 @@ async function fetchObjectRecords(
       (type === "contracts" &&
         isRecord(detailResponse.contract) &&
         detailResponse.contract) ||
-      (type === "actionItems" &&
-        isRecord(detailResponse.action_item) &&
-        detailResponse.action_item) ||
       (type === "assessments" &&
         isRecord(detailResponse.assessment) &&
         detailResponse.assessment) ||
@@ -1865,6 +1875,7 @@ async function migrateRecord(
   destinationClient: MigrationClient,
   record: Record<string, any>,
   actionItemAssigneeEmail?: string | null,
+  sourceMembers: SourceMember[] = [],
   destinationMembers: DestinationMember[] = [],
   destinationMeetingTypes: DestinationMeetingType[] = [],
   deliverableClientIdCache: Map<string, string> = new Map(),
@@ -2022,7 +2033,16 @@ async function migrateRecord(
 
   if (type === "actionItems") {
     const sourceAssigneeIds = extractActionItemAssigneeIds(record);
-    const sourceAssigneeEmails = extractActionItemAssigneeEmails(record);
+    const sourceAssigneeEmails = [
+      ...new Set(
+        [
+          ...extractActionItemAssigneeEmails(record),
+          ...sourceAssigneeIds
+            .map((sourceId) => findMemberEmailById(sourceMembers, sourceId))
+            .filter((value): value is string => Boolean(value)),
+        ].map((email) => email.trim().toLowerCase())
+      ),
+    ];
     const fallbackAssigneeEmail = actionItemAssigneeEmail?.trim().toLowerCase() || null;
 
     if (
@@ -2033,40 +2053,13 @@ async function migrateRecord(
       throw new Error("Skipped - no assignee available.");
     }
 
-    const resolvedAssignedUserIds = new Set<string>();
-
-    for (const sourceId of sourceAssigneeIds) {
-      resolvedAssignedUserIds.add(sourceId);
-    }
-
-    for (const email of sourceAssigneeEmails) {
-      const resolvedId =
-        findDestinationMemberIdByEmail(destinationMembers, email) ||
-        (await findDestinationMemberIdByEmailViaApi(destinationApiKey, email));
-      if (resolvedId) {
-        resolvedAssignedUserIds.add(resolvedId);
-      }
-    }
-
-    if (resolvedAssignedUserIds.size === 0 && fallbackAssigneeEmail) {
-      const fallbackId =
-        findDestinationMemberIdByEmail(destinationMembers, fallbackAssigneeEmail) ||
-        (await findDestinationMemberIdByEmailViaApi(
-          destinationApiKey,
-          fallbackAssigneeEmail
-        ));
-      if (fallbackId) {
-        resolvedAssignedUserIds.add(fallbackId);
-      }
-    }
-
     const assignedUserIdsPayload =
       sourceAssigneeEmails.length > 0
         ? sourceAssigneeEmails.map((email) => ({ email }))
         : fallbackAssigneeEmail
         ? [{ email: fallbackAssigneeEmail }]
-        : resolvedAssignedUserIds.size > 0
-        ? [...resolvedAssignedUserIds]
+        : sourceAssigneeIds.length > 0
+        ? sourceAssigneeIds
         : [];
 
     if (assignedUserIdsPayload.length === 0) {
@@ -2087,13 +2080,22 @@ async function migrateRecord(
       body
     );
 
-    if (record.completion_status) {
+    if (
+      record.is_completed === true ||
+      Boolean(record.completed_at) ||
+      asText(record.completion_status).length > 0
+    ) {
       await sleep(DEFAULT_DELAY_MS);
       await proxyCallWithRetry(
         destinationApiKey,
         `/lifecycle-manager/v1/action-items/${created.id}/completion-status`,
         "PUT",
-        { completion_status: record.completion_status }
+        {
+          is_completed:
+            record.is_completed === true ||
+            Boolean(record.completed_at) ||
+            asText(record.completion_status).toLowerCase() === "completed",
+        }
       );
     }
 
@@ -2108,7 +2110,7 @@ async function migrateRecord(
         recordName,
         resolvedEmail:
           sourceAssigneeEmails[0] || fallbackAssigneeEmail || null,
-        resolvedUserId: [...resolvedAssignedUserIds][0] || null,
+        resolvedUserId: null,
         sourceUserId: sourceAssigneeIds[0] || null,
         note: "Action Item assignee resolution",
       },
@@ -2850,6 +2852,7 @@ export async function runTenantMigration({
   let totalCreated = 0;
   let totalFailures = 0;
   let destinationMembers: DestinationMember[] = [];
+  let sourceMembers: SourceMember[] = [];
   let destinationMeetingTypes: DestinationMeetingType[] = [];
   let sourceAssessmentTemplates: AssessmentTemplateOverview[] = [];
   let destinationAssessmentTemplates: AssessmentTemplateOverview[] = [];
@@ -2863,11 +2866,19 @@ export async function runTenantMigration({
     destinationClients.map((client) => [client.id, client])
   );
 
-  if (selectedObjects.assessments || selectedObjects.actionItems) {
+  if (selectedObjects.assessments) {
     try {
       destinationMembers = await fetchDestinationMembers(destinationApiKey);
     } catch {
       destinationMembers = [];
+    }
+  }
+
+  if (selectedObjects.actionItems) {
+    try {
+      sourceMembers = await fetchDestinationMembers(sourceApiKey);
+    } catch {
+      sourceMembers = [];
     }
   }
 
@@ -2983,6 +2994,7 @@ export async function runTenantMigration({
             destinationClient,
             record,
             actionItemAssigneeEmail,
+            sourceMembers,
             destinationMembers,
             destinationMeetingTypes,
             destinationDeliverableClientIdCache,

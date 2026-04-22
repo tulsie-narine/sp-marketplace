@@ -258,6 +258,26 @@ const extractActionItemOwnerIds = (record: Record<string, unknown>) => {
   return [...ids];
 };
 
+async function fetchMembers(apiKey: string): Promise<Array<{ id: string; email: string }>> {
+  const members = await fetchAllPages(apiKey, "/core/v1/members");
+  return members
+    .map((member) => {
+      const id = asText(member.id);
+      const email = asText((member.contact_info as Record<string, unknown> | undefined)?.email).trim().toLowerCase();
+      return id && email ? { id, email } : null;
+    })
+    .filter((member): member is { id: string; email: string } => Boolean(member));
+}
+
+const findMemberEmailById = (
+  members: Array<{ id: string; email: string }>,
+  id: string | null | undefined,
+) => {
+  const normalizedId = asText(id);
+  if (!normalizedId) return "";
+  return members.find((member) => member.id === normalizedId)?.email || "";
+};
+
 async function fetchSourceRecords(
   apiKey: string,
   clientId: string,
@@ -307,6 +327,7 @@ async function recreate(
   destClientId: string,
   type: keyof SelectedObjects,
   record: Record<string, unknown>,
+  sourceMembers: Array<{ id: string; email: string }> = [],
 ): Promise<boolean> {
   const clientKey = { id: destClientId };
 
@@ -338,7 +359,16 @@ async function recreate(
   }
   if (type === "actionItems") {
     const assignedUserIds = extractActionItemOwnerIds(record);
-    const assignedEmails = extractActionItemOwnerEmails(record);
+    const assignedEmails = [
+      ...new Set(
+        [
+          ...extractActionItemOwnerEmails(record),
+          ...assignedUserIds
+            .map((id) => findMemberEmailById(sourceMembers, id))
+            .filter(Boolean),
+        ],
+      ),
+    ];
     if (assignedUserIds.length === 0 && assignedEmails.length === 0) return false;
     const body: Record<string, unknown> = {
       client_key: clientKey,
@@ -350,7 +380,25 @@ async function recreate(
       due_at: record.due_at || null,
     };
     const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/action-items", "POST", body);
-    return r.status >= 200 && r.status < 300;
+    const createdData = isRecord(r.data) ? r.data : {};
+    const createdId = asText(createdData.id);
+    if (!(r.status >= 200 && r.status < 300) || !createdId) return false;
+
+    const shouldComplete =
+      record.is_completed === true ||
+      Boolean(record.completed_at) ||
+      asText(record.completion_status).length > 0;
+    if (shouldComplete) {
+      await sleep(DEFAULT_DELAY_MS);
+      await spCallRetry(
+        apiKey,
+        `/lifecycle-manager/v1/action-items/${createdId}/completion-status`,
+        "PUT",
+        { is_completed: true },
+      );
+    }
+
+    return true;
   }
   if (type === "meetings") {
     const body: Record<string, unknown> = {
@@ -429,6 +477,7 @@ async function runConfig(supabaseAdmin: ReturnType<typeof createClient>, cfg: Co
   const apiKey = cfg.destination_api_key;
   const totals = { deleted: 0, created: 0, failures: 0 };
   const perClient: Array<Record<string, unknown>> = [];
+  const sourceMembers = cfg.selected_objects.actionItems ? await fetchMembers(apiKey) : [];
 
   // Pre-fetch source records once per object type
   const sourceData: Partial<Record<keyof SelectedObjects, Record<string, unknown>[]>> = {};
@@ -456,7 +505,7 @@ async function runConfig(supabaseAdmin: ReturnType<typeof createClient>, cfg: Co
       let failed = 0;
       const records = sourceData[type] || [];
       for (const rec of records) {
-        const ok = await recreate(apiKey, destId, type, rec);
+        const ok = await recreate(apiKey, destId, type, rec, sourceMembers);
         if (ok) created++;
         else failed++;
         await sleep(DEFAULT_DELAY_MS);
