@@ -344,9 +344,9 @@ async function recreate(
       client_key: clientKey,
       description: asText(record.description) || "Migrated action item",
       assigned_user_ids:
-        assignedUserIds.length > 0
-          ? assignedUserIds
-          : assignedEmails.map((email) => ({ email })),
+        assignedEmails.length > 0
+          ? assignedEmails.map((email) => ({ email }))
+          : assignedUserIds,
       due_at: record.due_at || null,
     };
     const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/action-items", "POST", body);

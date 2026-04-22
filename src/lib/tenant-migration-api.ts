@@ -2061,12 +2061,12 @@ async function migrateRecord(
     }
 
     const assignedUserIdsPayload =
-      resolvedAssignedUserIds.size > 0
-        ? [...resolvedAssignedUserIds]
-        : sourceAssigneeEmails.length > 0
+      sourceAssigneeEmails.length > 0
         ? sourceAssigneeEmails.map((email) => ({ email }))
         : fallbackAssigneeEmail
         ? [{ email: fallbackAssigneeEmail }]
+        : resolvedAssignedUserIds.size > 0
+        ? [...resolvedAssignedUserIds]
         : [];
 
     if (assignedUserIdsPayload.length === 0) {
