@@ -852,6 +852,74 @@ async function fetchRelationshipIdList(
     .filter((item): item is string => Boolean(item));
 }
 
+async function fetchActionItemsViaRelationships(
+  apiKey: string,
+  client: MigrationClient
+): Promise<Record<string, any>[]> {
+  const actionItemIds = new Set<string>();
+
+  const initiatives = await fetchAllPages<Record<string, any>>(
+    apiKey,
+    (cursor) => {
+      const params = new URLSearchParams({
+        "filter[client.id]": client.id,
+        page_size: "100",
+      });
+      if (cursor) params.set("cursor", cursor);
+      return `/lifecycle-manager/v1/initiatives?${params.toString()}`;
+    }
+  );
+
+  for (const initiative of initiatives) {
+    const initiativeId = asText(initiative.id);
+    if (!initiativeId) continue;
+    const ids = await fetchRelationshipIdList(
+      apiKey,
+      `/lifecycle-manager/v1/initiatives/${initiativeId}/action-items`,
+      "action_item_ids"
+    );
+    ids.forEach((id) => actionItemIds.add(id));
+  }
+
+  const meetings = await fetchAllPages<Record<string, any>>(
+    apiKey,
+    (cursor) => {
+      const params = new URLSearchParams({
+        "filter[client.id]": client.id,
+        page_size: "100",
+      });
+      if (cursor) params.set("cursor", cursor);
+      return `/lifecycle-manager/v1/meetings?${params.toString()}`;
+    }
+  );
+
+  for (const meeting of meetings) {
+    const meetingId = asText(meeting.id);
+    if (!meetingId) continue;
+    const ids = await fetchRelationshipIdList(
+      apiKey,
+      `/lifecycle-manager/v1/meetings/${meetingId}/action-items`,
+      "action_item_ids"
+    );
+    ids.forEach((id) => actionItemIds.add(id));
+  }
+
+  const records: Record<string, any>[] = [];
+  for (const actionItemId of actionItemIds) {
+    await sleep(DEFAULT_DELAY_MS);
+    const detailResponse = await proxyCallWithRetry<Record<string, any>>(
+      apiKey,
+      `/lifecycle-manager/v1/action-items/${actionItemId}`
+    );
+    const detailRecord =
+      (isRecord(detailResponse.action_item) && detailResponse.action_item) ||
+      detailResponse;
+    records.push(detailRecord);
+  }
+
+  return records;
+}
+
 async function collectClientRelationshipsFromSource(
   sourceApiKey: string,
   sourceRecords: Partial<
@@ -1590,17 +1658,26 @@ async function fetchObjectRecords(
       ? "/lifecycle-manager/v1/action-items"
       : `/lifecycle-manager/v1/${type}`;
 
-  const list = await fetchAllPages<Record<string, any>>(
-    apiKey,
-    (cursor) => {
-      const params = new URLSearchParams({
-        "filter[client.id]": client.id,
-        page_size: "100",
-      });
-      if (cursor) params.set("cursor", cursor);
-      return `${endpointBase}?${params.toString()}`;
+  let list: Record<string, any>[] = [];
+  try {
+    list = await fetchAllPages<Record<string, any>>(
+      apiKey,
+      (cursor) => {
+        const params = new URLSearchParams({
+          "filter[client.id]": client.id,
+          page_size: "100",
+        });
+        if (cursor) params.set("cursor", cursor);
+        return `${endpointBase}?${params.toString()}`;
+      }
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "";
+    if (type !== "actionItems" || !/\b5\d{2}\b/.test(detail)) {
+      throw error;
     }
-  );
+    return fetchActionItemsViaRelationships(apiKey, client);
+  }
 
   if (
     type !== "assessments" &&
@@ -2196,12 +2273,36 @@ async function migrateRecord(
       agenda_json: record.agenda_json ?? null,
     };
 
-    const created = await proxyCallWithRetry<{ id: string }>(
-      destinationApiKey,
-      "/lifecycle-manager/v2/meetings",
-      "POST",
-      body
-    );
+    let created: { id: string };
+    let usedV1Fallback = false;
+    try {
+      created = await proxyCallWithRetry<{ id: string }>(
+        destinationApiKey,
+        "/lifecycle-manager/v2/meetings",
+        "POST",
+        body
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "";
+      if (!/\b5\d{2}\b/.test(detail)) {
+        throw error;
+      }
+
+      usedV1Fallback = true;
+      created = await proxyCallWithRetry<{ id: string }>(
+        destinationApiKey,
+        "/lifecycle-manager/v1/meetings",
+        "POST",
+        {
+          client_key: { id: destinationClientId },
+          title: body.title,
+          scheduled_at:
+            (isIsoDateTime(record.scheduled_at) && record.scheduled_at) ||
+            body.starts_at ||
+            null,
+        }
+      );
+    }
 
     if (!meetingTypeId) {
       warnings.push(
@@ -2210,6 +2311,17 @@ async function migrateRecord(
           OBJECT_LABELS.meetings,
           recordName,
           "Meeting type ID was unavailable on source - created meeting without a type."
+        )
+      );
+    }
+
+    if (usedV1Fallback) {
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.meetings,
+          recordName,
+          "Meeting created via the v1 fallback because the v2 meetings endpoint returned a server error."
         )
       );
     }
