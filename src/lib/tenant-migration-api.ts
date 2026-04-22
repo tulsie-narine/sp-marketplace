@@ -919,6 +919,7 @@ async function fetchActionItemsViaRelationships(
   client: MigrationClient
 ): Promise<Record<string, any>[]> {
   const actionItemIds = new Set<string>();
+  const diagnostics: string[] = [];
 
   let initiatives: Record<string, any>[] = [];
   try {
@@ -933,7 +934,12 @@ async function fetchActionItemsViaRelationships(
         return `/lifecycle-manager/v1/initiatives?${params.toString()}`;
       }
     );
-  } catch {
+  } catch (error) {
+    diagnostics.push(
+      `Initiatives list fallback failed: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`
+    );
     initiatives = [];
   }
 
@@ -947,7 +953,12 @@ async function fetchActionItemsViaRelationships(
         `/lifecycle-manager/v1/initiatives/${initiativeId}/action-items`,
         "action_item_ids"
       );
-    } catch {
+    } catch (error) {
+      diagnostics.push(
+        `Initiative ${initiativeId} action-items link fetch failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
       ids = [];
     }
     ids.forEach((id) => actionItemIds.add(id));
@@ -966,7 +977,12 @@ async function fetchActionItemsViaRelationships(
         return `/lifecycle-manager/v1/meetings?${params.toString()}`;
       }
     );
-  } catch {
+  } catch (error) {
+    diagnostics.push(
+      `Meetings list fallback failed: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`
+    );
     meetings = [];
   }
 
@@ -980,7 +996,12 @@ async function fetchActionItemsViaRelationships(
         `/lifecycle-manager/v1/meetings/${meetingId}/action-items`,
         "action_item_ids"
       );
-    } catch {
+    } catch (error) {
+      diagnostics.push(
+        `Meeting ${meetingId} action-items link fetch failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
       ids = [];
     }
     ids.forEach((id) => actionItemIds.add(id));
@@ -998,9 +1019,20 @@ async function fetchActionItemsViaRelationships(
         (isRecord(detailResponse.action_item) && detailResponse.action_item) ||
         detailResponse;
       records.push(detailRecord);
-    } catch {
+    } catch (error) {
+      diagnostics.push(
+        `Action item detail ${actionItemId} fetch failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
       continue;
     }
+  }
+
+  if (records.length === 0 && diagnostics.length > 0) {
+    throw new Error(
+      `Action item fallback produced no records. ${diagnostics.join(" | ")}`
+    );
   }
 
   return records;
@@ -1762,7 +1794,16 @@ async function fetchObjectRecords(
     if (type !== "actionItems" || !/\b5\d{2}\b/.test(detail)) {
       throw error;
     }
-    return fetchActionItemsViaRelationships(apiKey, client);
+    try {
+      return await fetchActionItemsViaRelationships(apiKey, client);
+    } catch (fallbackError) {
+      const listError = error instanceof Error ? error.message : "Unknown error";
+      const fallbackDetail =
+        fallbackError instanceof Error ? fallbackError.message : "Unknown fallback error";
+      throw new Error(
+        `Primary action-items list failed: ${listError}. Relationship fallback also failed: ${fallbackDetail}`
+      );
+    }
   }
 
   if (
