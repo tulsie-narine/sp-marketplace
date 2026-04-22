@@ -472,6 +472,128 @@ export function LcmDataResetWorkspace() {
     setFinalTab("summary");
   };
 
+  const applyConfig = (config: LcmDataResetConfig) => {
+    if (!destinationApiKey) {
+      toast({
+        title: "Connect a tenant first",
+        description: "Saved configs require an active tenant API key in this session.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setTenantMode("same");
+    setActiveConfigId(config.id);
+    setConfigName(config.name);
+    setSelectedSourceClientId(config.source_client_id);
+    setSelectedDestinationIds(new Set(config.destination_client_ids));
+    setSelectedObjects({
+      ...DEFAULT_RESET_SELECTED_OBJECTS,
+      ...config.selected_objects,
+    });
+    setScheduleNightly(config.schedule_enabled);
+    toast({
+      title: "Config loaded",
+      description: `Applied "${config.name}". Review and run when ready.`,
+    });
+  };
+
+  const handleSaveConfig = async () => {
+    if (tenantMode !== "same") {
+      toast({
+        title: "Same-tenant mode required",
+        description: "Saved configs and the nightly schedule only support same-tenant clones.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!selectedSourceClient || selectedDestinationClients.length === 0) {
+      toast({
+        title: "Pick a source and destinations",
+        description: "Choose the gold client and at least one destination before saving.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!destinationApiKey) {
+      toast({
+        title: "Missing tenant API key",
+        description: "Connect to a tenant in Settings before saving a configuration.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setSavingConfig(true);
+    try {
+      const saved = await saveConfig({
+        id: activeConfigId || undefined,
+        name: configName.trim() || "Default",
+        destinationApiKey,
+        sourceClientId: selectedSourceClient.id,
+        sourceClientName: selectedSourceClient.name,
+        destinationClientIds: selectedDestinationClients.map((c) => c.id),
+        destinationClientNames: selectedDestinationClients.map((c) => c.name),
+        selectedObjects,
+        scheduleEnabled: scheduleNightly,
+      });
+      setActiveConfigId(saved.id);
+      const list = await listConfigs();
+      setSavedConfigs(list);
+      toast({
+        title: "Configuration saved",
+        description: scheduleNightly
+          ? "Saved. Nightly clone enabled — runs at 2:00 AM Eastern."
+          : "Saved. Use it later from the Saved Configurations panel.",
+      });
+    } catch (error) {
+      toast({
+        title: "Save failed",
+        description: error instanceof Error ? error.message : "Unable to save configuration.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
+  const handleDeleteConfig = async (id: string) => {
+    try {
+      await deleteConfig(id);
+      setSavedConfigs((prev) => prev.filter((c) => c.id !== id));
+      if (activeConfigId === id) {
+        setActiveConfigId(null);
+        setConfigName("Default");
+        setScheduleNightly(false);
+      }
+      toast({ title: "Configuration deleted" });
+    } catch (error) {
+      toast({
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "Unable to delete configuration.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleToggleSchedule = async (config: LcmDataResetConfig, enabled: boolean) => {
+    try {
+      const updated = await setScheduleEnabled(config.id, enabled);
+      setSavedConfigs((prev) => prev.map((c) => (c.id === config.id ? updated : c)));
+      if (activeConfigId === config.id) setScheduleNightly(enabled);
+      toast({
+        title: enabled ? "Nightly schedule enabled" : "Nightly schedule disabled",
+        description: enabled
+          ? "This config will run automatically at 2:00 AM Eastern."
+          : "Automatic runs paused for this config.",
+      });
+    } catch (error) {
+      toast({
+        title: "Update failed",
+        description: error instanceof Error ? error.message : "Unable to update schedule.",
+        variant: "destructive",
+      });
+    }
+  };
+
   const renderScreenOne = () => (
     <div className="space-y-4">
       <div className="rounded-lg border border-border bg-card p-6">
