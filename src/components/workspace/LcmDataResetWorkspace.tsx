@@ -188,6 +188,7 @@ export function LcmDataResetWorkspace() {
   const [selectedObjects, setSelectedObjects] = useState<SelectedObjects>(
     DEFAULT_RESET_SELECTED_OBJECTS
   );
+  const [actionItemAssigneeEmail, setActionItemAssigneeEmail] = useState("");
   const [confirmationText, setConfirmationText] = useState("");
   const [sourceSearch, setSourceSearch] = useState("");
   const [destinationSearch, setDestinationSearch] = useState("");
@@ -411,6 +412,7 @@ export function LcmDataResetWorkspace() {
         sourceClient: selectedSourceClient,
         destinationClients: selectedDestinationClients,
         selectedObjects,
+        actionItemAssigneeEmail: actionItemAssigneeEmail.trim() || null,
         onClientProgress: (clientIndex, progress) => {
           setProgressList((prev) => {
             const next = [...prev];
@@ -464,6 +466,7 @@ export function LcmDataResetWorkspace() {
     setSelectedSourceClientId("");
     setSelectedDestinationIds(new Set());
     setSelectedObjects(DEFAULT_RESET_SELECTED_OBJECTS);
+    setActionItemAssigneeEmail("");
     setConfirmationText("");
     setRunError(null);
     setRunning(false);
@@ -1004,6 +1007,27 @@ export function LcmDataResetWorkspace() {
               <span>{option.label}</span>
             </label>
           ))}
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-card p-4">
+        <div className="space-y-2">
+          <div>
+            <h4 className="text-sm font-semibold text-foreground">
+              Action Item Assignee Override
+            </h4>
+            <p className="text-xs text-muted-foreground">
+              Optional. Enter a destination user email to force action items to use this assignee during testing.
+              If left blank, the clone will keep trying to preserve the source assignee.
+            </p>
+          </div>
+          <input
+            type="email"
+            value={actionItemAssigneeEmail}
+            onChange={(event) => setActionItemAssigneeEmail(event.target.value)}
+            placeholder="name@company.com"
+            className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
         </div>
       </div>
 
