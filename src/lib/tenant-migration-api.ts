@@ -532,6 +532,41 @@ function extractActionItemAssigneeEmail(record: Record<string, any>) {
   );
 }
 
+function extractActionItemAssigneeEmails(record: Record<string, any>) {
+  const emails = new Set<string>();
+  const push = (value: unknown) => {
+    const email = asText(value)?.trim().toLowerCase();
+    if (email) emails.add(email);
+  };
+
+  push(record.assigned_user?.email);
+  push(record.owner?.email);
+  push(record.assigned_user_email);
+  push(record.assignee?.email);
+  push(record.assignee_email);
+
+  for (const collection of [
+    record.assigned_user_ids,
+    record.assigned_users,
+    record.assignees,
+  ]) {
+    if (!Array.isArray(collection)) continue;
+    for (const item of collection) {
+      if (typeof item === "string" && item.includes("@")) {
+        push(item);
+        continue;
+      }
+      if (!isRecord(item)) continue;
+      push(item.email);
+      push(item.contact_info?.email);
+      push(item.user?.email);
+      push(item.member?.email);
+    }
+  }
+
+  return [...emails];
+}
+
 function extractActionItemAssigneeId(record: Record<string, any>) {
   return (
     asText(record.assigned_user?.id) ||
@@ -545,6 +580,33 @@ function extractActionItemAssigneeId(record: Record<string, any>) {
     extractIds(record.assignees)[0] ||
     null
   );
+}
+
+function extractActionItemAssigneeIds(record: Record<string, any>) {
+  const ids = new Set<string>();
+  const push = (value: unknown) => {
+    const text = asText(value);
+    if (text) ids.add(text);
+  };
+
+  push(record.assigned_user?.id);
+  push(record.owner?.id);
+  push(record.assignee?.id);
+  push(record.assigned_user_id);
+  push(record.owner_id);
+  push(record.assignee_id);
+
+  for (const collection of [
+    record.assigned_user_ids,
+    record.assigned_users,
+    record.assignees,
+  ]) {
+    for (const id of extractIds(collection)) {
+      ids.add(id);
+    }
+  }
+
+  return [...ids];
 }
 
 function extractAssessmentEvaluatorEmail(record: Record<string, any>) {
@@ -1894,27 +1956,62 @@ async function migrateRecord(
   }
 
   if (type === "actionItems") {
-    const sourceAssigneeId = extractActionItemAssigneeId(record);
-    const sourceAssigneeEmail =
-      extractActionItemAssigneeEmail(record) || actionItemAssigneeEmail || null;
-    const matchedUserId =
-      findDestinationMemberIdByEmail(destinationMembers, sourceAssigneeEmail) ||
-      (await findDestinationMemberIdByEmailViaApi(
-        destinationApiKey,
-        sourceAssigneeEmail
-      )) ||
-      sourceAssigneeId;
+    const sourceAssigneeIds = extractActionItemAssigneeIds(record);
+    const sourceAssigneeEmails = extractActionItemAssigneeEmails(record);
+    const fallbackAssigneeEmail = actionItemAssigneeEmail?.trim().toLowerCase() || null;
 
-    if (!matchedUserId && !sourceAssigneeEmail) {
+    if (
+      sourceAssigneeIds.length === 0 &&
+      sourceAssigneeEmails.length === 0 &&
+      !fallbackAssigneeEmail
+    ) {
       throw new Error("Skipped - no assignee available.");
+    }
+
+    const resolvedAssignedUserIds = new Set<string>();
+
+    for (const sourceId of sourceAssigneeIds) {
+      resolvedAssignedUserIds.add(sourceId);
+    }
+
+    for (const email of sourceAssigneeEmails) {
+      const resolvedId =
+        findDestinationMemberIdByEmail(destinationMembers, email) ||
+        (await findDestinationMemberIdByEmailViaApi(destinationApiKey, email));
+      if (resolvedId) {
+        resolvedAssignedUserIds.add(resolvedId);
+      }
+    }
+
+    if (resolvedAssignedUserIds.size === 0 && fallbackAssigneeEmail) {
+      const fallbackId =
+        findDestinationMemberIdByEmail(destinationMembers, fallbackAssigneeEmail) ||
+        (await findDestinationMemberIdByEmailViaApi(
+          destinationApiKey,
+          fallbackAssigneeEmail
+        ));
+      if (fallbackId) {
+        resolvedAssignedUserIds.add(fallbackId);
+      }
+    }
+
+    const assignedUserIdsPayload =
+      resolvedAssignedUserIds.size > 0
+        ? [...resolvedAssignedUserIds]
+        : sourceAssigneeEmails.length > 0
+        ? sourceAssigneeEmails.map((email) => ({ email }))
+        : fallbackAssigneeEmail
+        ? [{ email: fallbackAssigneeEmail }]
+        : [];
+
+    if (assignedUserIdsPayload.length === 0) {
+      throw new Error("Skipped - assignees could not be resolved for creation.");
     }
 
     const body = {
       client_key: { id: destinationClientId },
       description: asText(record.description) || "Migrated action item",
-      assigned_user_ids: matchedUserId
-        ? [matchedUserId]
-        : [{ email: sourceAssigneeEmail }],
+      assigned_user_ids: assignedUserIdsPayload,
       due_at: normalizeDueAt(record.due_at),
     };
 
@@ -1944,9 +2041,10 @@ async function migrateRecord(
         clientName: destinationClient.name,
         objectType: OBJECT_LABELS.actionItems,
         recordName,
-        resolvedEmail: sourceAssigneeEmail,
-        resolvedUserId: matchedUserId,
-        sourceUserId: sourceAssigneeId,
+        resolvedEmail:
+          sourceAssigneeEmails[0] || fallbackAssigneeEmail || null,
+        resolvedUserId: [...resolvedAssignedUserIds][0] || null,
+        sourceUserId: sourceAssigneeIds[0] || null,
         note: "Action Item assignee resolution",
       },
     };

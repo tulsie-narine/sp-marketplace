@@ -194,6 +194,41 @@ const extractActionItemOwnerEmail = (record: Record<string, unknown>) =>
   asText(record.assignee_email) ||
   "";
 
+const extractActionItemOwnerEmails = (record: Record<string, unknown>) => {
+  const emails = new Set<string>();
+  const push = (value: unknown) => {
+    const email = asText(value).trim().toLowerCase();
+    if (email) emails.add(email);
+  };
+
+  push((record.assigned_user as Record<string, unknown> | undefined)?.email);
+  push((record.owner as Record<string, unknown> | undefined)?.email);
+  push(record.assigned_user_email);
+  push((record.assignee as Record<string, unknown> | undefined)?.email);
+  push(record.assignee_email);
+
+  for (const collection of [
+    record.assigned_user_ids,
+    record.assigned_users,
+    record.assignees,
+  ]) {
+    if (!Array.isArray(collection)) continue;
+    for (const item of collection) {
+      if (typeof item === "string" && item.includes("@")) {
+        push(item);
+        continue;
+      }
+      if (!isRecord(item)) continue;
+      push(item.email);
+      push((item.contact_info as Record<string, unknown> | undefined)?.email);
+      push((item.user as Record<string, unknown> | undefined)?.email);
+      push((item.member as Record<string, unknown> | undefined)?.email);
+    }
+  }
+
+  return [...emails];
+};
+
 const extractActionItemOwnerId = (record: Record<string, unknown>) =>
   asText((record.assigned_user as Record<string, unknown> | undefined)?.id) ||
   asText((record.owner as Record<string, unknown> | undefined)?.id) ||
@@ -204,6 +239,24 @@ const extractActionItemOwnerId = (record: Record<string, unknown>) =>
   extractIdArray(record.assigned_users)[0] ||
   extractIdArray(record.assignees)[0] ||
   "";
+
+const extractActionItemOwnerIds = (record: Record<string, unknown>) => {
+  const ids = new Set<string>();
+  const push = (value: unknown) => {
+    const id = asText(value);
+    if (id) ids.add(id);
+  };
+
+  push((record.assigned_user as Record<string, unknown> | undefined)?.id);
+  push((record.owner as Record<string, unknown> | undefined)?.id);
+  push(record.assigned_user_id);
+  push((record.assignee as Record<string, unknown> | undefined)?.id);
+  push(record.assignee_id);
+  extractIdArray(record.assigned_user_ids).forEach((id) => ids.add(id));
+  extractIdArray(record.assigned_users).forEach((id) => ids.add(id));
+  extractIdArray(record.assignees).forEach((id) => ids.add(id));
+  return [...ids];
+};
 
 async function fetchSourceRecords(
   apiKey: string,
@@ -284,13 +337,16 @@ async function recreate(
     return r.status >= 200 && r.status < 300;
   }
   if (type === "actionItems") {
-    const assignedUserId = extractActionItemOwnerId(record);
-    const assignedEmail = extractActionItemOwnerEmail(record);
-    if (!assignedUserId && !assignedEmail) return false;
+    const assignedUserIds = extractActionItemOwnerIds(record);
+    const assignedEmails = extractActionItemOwnerEmails(record);
+    if (assignedUserIds.length === 0 && assignedEmails.length === 0) return false;
     const body: Record<string, unknown> = {
       client_key: clientKey,
       description: asText(record.description) || "Migrated action item",
-      assigned_user_ids: assignedUserId ? [assignedUserId] : [{ email: assignedEmail }],
+      assigned_user_ids:
+        assignedUserIds.length > 0
+          ? assignedUserIds
+          : assignedEmails.map((email) => ({ email })),
       due_at: record.due_at || null,
     };
     const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/action-items", "POST", body);
