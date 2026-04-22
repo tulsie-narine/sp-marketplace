@@ -10,6 +10,9 @@ import {
   Loader2,
   RefreshCcw,
   Search,
+  Save,
+  Trash2,
+  Clock,
   TriangleAlert,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -29,6 +32,13 @@ import {
   type ProgressStatus,
   type SelectedObjects,
 } from "@/lib/tenant-migration-api";
+import {
+  deleteConfig,
+  listConfigs,
+  saveConfig,
+  setScheduleEnabled,
+  type LcmDataResetConfig,
+} from "@/lib/lcm-config-api";
 
 const PAGE_SIZE = 8;
 const FINAL_TABS = ["summary", "errors", "relationships"] as const;
@@ -193,8 +203,37 @@ export function LcmDataResetWorkspace() {
   const [result, setResult] = useState<LcmDataResetResult | null>(null);
   const [finalTab, setFinalTab] = useState<FinalTab>("summary");
 
+  // Saved-configuration state (per-user persistence + nightly schedule)
+  const [savedConfigs, setSavedConfigs] = useState<LcmDataResetConfig[]>([]);
+  const [loadingConfigs, setLoadingConfigs] = useState(false);
+  const [activeConfigId, setActiveConfigId] = useState<string | null>(null);
+  const [configName, setConfigName] = useState("Default");
+  const [scheduleNightly, setScheduleNightly] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
+
   useEffect(() => setSourcePage(1), [sourceSearch]);
   useEffect(() => setDestinationPage(1), [destinationSearch]);
+
+  // Load saved configurations on mount
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingConfigs(true);
+    listConfigs()
+      .then((configs) => {
+        if (cancelled) return;
+        setSavedConfigs(configs);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn("Failed to load saved configs", error);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingConfigs(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!destinationApiKey) return;
@@ -433,8 +472,194 @@ export function LcmDataResetWorkspace() {
     setFinalTab("summary");
   };
 
+  const applyConfig = (config: LcmDataResetConfig) => {
+    if (!destinationApiKey) {
+      toast({
+        title: "Connect a tenant first",
+        description: "Saved configs require an active tenant API key in this session.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setTenantMode("same");
+    setActiveConfigId(config.id);
+    setConfigName(config.name);
+    setSelectedSourceClientId(config.source_client_id);
+    setSelectedDestinationIds(new Set(config.destination_client_ids));
+    setSelectedObjects({
+      ...DEFAULT_RESET_SELECTED_OBJECTS,
+      ...config.selected_objects,
+    });
+    setScheduleNightly(config.schedule_enabled);
+    toast({
+      title: "Config loaded",
+      description: `Applied "${config.name}". Review and run when ready.`,
+    });
+  };
+
+  const handleSaveConfig = async () => {
+    if (tenantMode !== "same") {
+      toast({
+        title: "Same-tenant mode required",
+        description: "Saved configs and the nightly schedule only support same-tenant clones.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!selectedSourceClient || selectedDestinationClients.length === 0) {
+      toast({
+        title: "Pick a source and destinations",
+        description: "Choose the gold client and at least one destination before saving.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!destinationApiKey) {
+      toast({
+        title: "Missing tenant API key",
+        description: "Connect to a tenant in Settings before saving a configuration.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setSavingConfig(true);
+    try {
+      const saved = await saveConfig({
+        id: activeConfigId || undefined,
+        name: configName.trim() || "Default",
+        destinationApiKey,
+        sourceClientId: selectedSourceClient.id,
+        sourceClientName: selectedSourceClient.name,
+        destinationClientIds: selectedDestinationClients.map((c) => c.id),
+        destinationClientNames: selectedDestinationClients.map((c) => c.name),
+        selectedObjects,
+        scheduleEnabled: scheduleNightly,
+      });
+      setActiveConfigId(saved.id);
+      const list = await listConfigs();
+      setSavedConfigs(list);
+      toast({
+        title: "Configuration saved",
+        description: scheduleNightly
+          ? "Saved. Nightly clone enabled — runs at 2:00 AM Eastern."
+          : "Saved. Use it later from the Saved Configurations panel.",
+      });
+    } catch (error) {
+      toast({
+        title: "Save failed",
+        description: error instanceof Error ? error.message : "Unable to save configuration.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
+  const handleDeleteConfig = async (id: string) => {
+    try {
+      await deleteConfig(id);
+      setSavedConfigs((prev) => prev.filter((c) => c.id !== id));
+      if (activeConfigId === id) {
+        setActiveConfigId(null);
+        setConfigName("Default");
+        setScheduleNightly(false);
+      }
+      toast({ title: "Configuration deleted" });
+    } catch (error) {
+      toast({
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "Unable to delete configuration.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleToggleSchedule = async (config: LcmDataResetConfig, enabled: boolean) => {
+    try {
+      const updated = await setScheduleEnabled(config.id, enabled);
+      setSavedConfigs((prev) => prev.map((c) => (c.id === config.id ? updated : c)));
+      if (activeConfigId === config.id) setScheduleNightly(enabled);
+      toast({
+        title: enabled ? "Nightly schedule enabled" : "Nightly schedule disabled",
+        description: enabled
+          ? "This config will run automatically at 2:00 AM Eastern."
+          : "Automatic runs paused for this config.",
+      });
+    } catch (error) {
+      toast({
+        title: "Update failed",
+        description: error instanceof Error ? error.message : "Unable to update schedule.",
+        variant: "destructive",
+      });
+    }
+  };
+
   const renderScreenOne = () => (
     <div className="space-y-4">
+      <div className="rounded-lg border border-border bg-card p-5">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-heading text-lg font-bold text-foreground">
+              Saved Configurations
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              Reuse a saved gold client + destinations setup, or enable a nightly 2:00 AM ET auto-run.
+            </p>
+          </div>
+          {loadingConfigs && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+        </div>
+        {savedConfigs.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No saved configurations yet. Pick clients in same-tenant mode below, then save from the Reset Options screen.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {savedConfigs.map((config) => (
+              <div
+                key={config.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface-raised/40 px-3 py-2 text-xs"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-foreground">{config.name}</p>
+                  <p className="truncate text-[11px] text-muted-foreground">
+                    Source: {config.source_client_name} → {config.destination_client_ids.length} destinations
+                  </p>
+                  {config.last_run_at && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Last run: {new Date(config.last_run_at).toLocaleString()} ({config.last_run_status || "—"})
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={config.schedule_enabled}
+                      onChange={(e) => handleToggleSchedule(config, e.target.checked)}
+                    />
+                    <Clock className="h-3 w-3" />
+                    2 AM ET
+                  </label>
+                  <button
+                    onClick={() => applyConfig(config)}
+                    className="rounded-md border border-border px-2 py-1 text-foreground transition-colors hover:bg-surface-raised"
+                  >
+                    Load
+                  </button>
+                  <button
+                    onClick={() => handleDeleteConfig(config.id)}
+                    className="rounded-md border border-destructive/30 px-2 py-1 text-destructive transition-colors hover:bg-destructive/10"
+                    title="Delete config"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="rounded-lg border border-border bg-card p-6">
         <div className="mb-6 flex items-center gap-4">
           <span className="text-4xl">🧰</span>
@@ -781,6 +1006,54 @@ export function LcmDataResetWorkspace() {
           ))}
         </div>
       </div>
+
+      {tenantMode === "same" && (
+        <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
+          <div className="flex items-start gap-3">
+            <Save className="mt-0.5 h-5 w-5 text-primary" />
+            <div className="flex-1 space-y-3">
+              <div>
+                <h4 className="text-sm font-semibold text-foreground">
+                  Save this configuration {activeConfigId ? "(updating existing)" : "(new)"}
+                </h4>
+                <p className="text-xs text-muted-foreground">
+                  Stores the gold client, destinations, and selected objects so you can re-run with one click — or schedule it nightly.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+                <input
+                  value={configName}
+                  onChange={(e) => setConfigName(e.target.value)}
+                  placeholder="Configuration name"
+                  className="h-10 rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <label className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 text-xs text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={scheduleNightly}
+                    onChange={(e) => setScheduleNightly(e.target.checked)}
+                  />
+                  <Clock className="h-3.5 w-3.5" />
+                  Run nightly at 2:00 AM ET
+                </label>
+                <button
+                  onClick={handleSaveConfig}
+                  disabled={savingConfig}
+                  className="inline-flex items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {savingConfig && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {activeConfigId ? "Update" : "Save"}
+                </button>
+              </div>
+              {scheduleNightly && (
+                <p className="text-[11px] text-muted-foreground">
+                  Scheduled runs use the tenant API key currently in your session, stored encrypted-at-rest with your config.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="rounded-lg border border-warning/30 bg-warning/10 p-4">
         <div className="flex items-start gap-3">

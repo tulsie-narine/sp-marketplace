@@ -1,0 +1,380 @@
+// LCM Data Reset — Nightly Cron Runner
+// ------------------------------------
+// Executes saved same-tenant "gold client" clones automatically.
+// Triggered by pg_cron at ~2:00 AM Eastern. Iterates every config with
+// schedule_enabled=true and runs reset+clone for the supported object
+// types (initiatives, goals, action items, notes, contracts, meetings,
+// deliverables). Assessments are intentionally skipped here — their
+// template-mapped evaluation flow lives in the client orchestration
+// and is not yet ported server-side.
+//
+// CORS is wide-open because this endpoint is invoked by pg_cron / pg_net
+// from inside the database, not by browsers.
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+const SCALEPAD_BASE = "https://api.scalepad.com";
+const DEFAULT_DELAY_MS = 250;
+const MAX_PAGES = 200;
+const PAGE_SIZE = 50;
+
+type SelectedObjects = {
+  initiatives?: boolean;
+  goals?: boolean;
+  meetings?: boolean;
+  notes?: boolean;
+  actionItems?: boolean;
+  contracts?: boolean;
+  assessments?: boolean;
+  deliverables?: boolean;
+};
+
+interface ConfigRow {
+  id: string;
+  user_id: string;
+  name: string;
+  destination_api_key: string;
+  source_client_id: string;
+  source_client_name: string;
+  destination_client_ids: string[];
+  destination_client_names: string[];
+  selected_objects: SelectedObjects;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function spCall(
+  apiKey: string,
+  endpoint: string,
+  method: string = "GET",
+  body?: unknown,
+): Promise<{ status: number; data: unknown; text: string }> {
+  const headers: Record<string, string> = {
+    "X-API-Key": apiKey,
+    Accept: "application/json",
+  };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+
+  const res = await fetch(`${SCALEPAD_BASE}${endpoint}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let data: unknown = null;
+  if (text) {
+    try { data = JSON.parse(text); } catch { data = text; }
+  }
+  return { status: res.status, data, text };
+}
+
+async function spCallRetry(
+  apiKey: string,
+  endpoint: string,
+  method: string = "GET",
+  body?: unknown,
+  attempts = 3,
+): Promise<{ status: number; data: unknown; text: string }> {
+  let last: { status: number; data: unknown; text: string } | null = null;
+  for (let i = 0; i < attempts; i++) {
+    const r = await spCall(apiKey, endpoint, method, body);
+    last = r;
+    if (r.status < 500 && r.status !== 429) return r;
+    await sleep(500 * (i + 1));
+  }
+  return last!;
+}
+
+async function fetchAllPages(
+  apiKey: string,
+  basePath: string,
+): Promise<Record<string, unknown>[]> {
+  const all: Record<string, unknown>[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const sep = basePath.includes("?") ? "&" : "?";
+    const url = `${basePath}${sep}page_size=${PAGE_SIZE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+    const r = await spCallRetry(apiKey, url, "GET");
+    if (r.status >= 400) break;
+    const data = r.data as Record<string, unknown> | null;
+    const items = (data?.items || data?.data || []) as Record<string, unknown>[];
+    if (Array.isArray(items)) all.push(...items);
+    cursor = (data?.next_cursor as string) || (data?.cursor as string) || null;
+    if (!cursor || items.length === 0) break;
+    await sleep(50);
+  }
+  return all;
+}
+
+// --------- Cleanup (delete for one client) ---------
+
+const CLEANUP_ENDPOINTS: Record<keyof SelectedObjects, { list: (clientId: string) => string; del: (id: string) => string } | null> = {
+  initiatives: {
+    list: (c) => `/lifecycle-manager/v1/initiatives?client_id=${c}`,
+    del: (id) => `/lifecycle-manager/v1/initiatives/${id}`,
+  },
+  goals: {
+    list: (c) => `/lifecycle-manager/v1/goals?client_id=${c}`,
+    del: (id) => `/lifecycle-manager/v1/goals/${id}`,
+  },
+  meetings: {
+    list: (c) => `/lifecycle-manager/v1/meetings?client_id=${c}`,
+    del: (id) => `/lifecycle-manager/v1/meetings/${id}`,
+  },
+  notes: {
+    list: (c) => `/lifecycle-manager/v1/notes?client_id=${c}`,
+    del: (id) => `/lifecycle-manager/v1/notes/${id}`,
+  },
+  actionItems: {
+    list: (c) => `/lifecycle-manager/v1/action-items?client_id=${c}`,
+    del: (id) => `/lifecycle-manager/v1/action-items/${id}`,
+  },
+  contracts: {
+    list: (c) => `/lifecycle-manager/v1/contracts?client_id=${c}`,
+    del: (id) => `/lifecycle-manager/v1/contracts/${id}`,
+  },
+  deliverables: {
+    list: (c) => `/lifecycle-manager/v1/deliverables?client_id=${c}`,
+    del: (id) => `/lifecycle-manager/v1/deliverables/${id}`,
+  },
+  assessments: null, // intentionally not supported in nightly cron
+};
+
+async function deleteClientSection(
+  apiKey: string,
+  clientId: string,
+  type: keyof SelectedObjects,
+): Promise<{ deleted: number; failed: number }> {
+  const ep = CLEANUP_ENDPOINTS[type];
+  if (!ep) return { deleted: 0, failed: 0 };
+  const items = await fetchAllPages(apiKey, ep.list(clientId));
+  let deleted = 0;
+  let failed = 0;
+  for (const item of items) {
+    const id = (item.id as string) || (item.uuid as string);
+    if (!id) continue;
+    const r = await spCallRetry(apiKey, ep.del(id), "DELETE");
+    if (r.status >= 200 && r.status < 300) deleted++;
+    else failed++;
+    await sleep(DEFAULT_DELAY_MS);
+  }
+  return { deleted, failed };
+}
+
+// --------- Recreation (copy from source -> dest, minimal but faithful) ---------
+
+const asText = (v: unknown): string => (typeof v === "string" ? v : v == null ? "" : String(v));
+
+async function fetchSourceRecords(
+  apiKey: string,
+  clientId: string,
+  type: keyof SelectedObjects,
+): Promise<Record<string, unknown>[]> {
+  const ep = CLEANUP_ENDPOINTS[type];
+  if (!ep) return [];
+  return fetchAllPages(apiKey, ep.list(clientId));
+}
+
+async function recreate(
+  apiKey: string,
+  destClientId: string,
+  type: keyof SelectedObjects,
+  record: Record<string, unknown>,
+): Promise<boolean> {
+  const clientKey = { id: destClientId };
+
+  if (type === "initiatives") {
+    const body: Record<string, unknown> = {
+      client_key: clientKey,
+      name: asText(record.name) || "Migrated Initiative",
+      description: asText(record.description) || "",
+    };
+    const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/initiatives", "POST", body);
+    return r.status >= 200 && r.status < 300;
+  }
+  if (type === "goals") {
+    const body: Record<string, unknown> = {
+      client_key: clientKey,
+      title: asText(record.title) || asText(record.name) || "Migrated Goal",
+      description: asText(record.description) || "",
+    };
+    const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/goals", "POST", body);
+    return r.status >= 200 && r.status < 300;
+  }
+  if (type === "notes") {
+    const body: Record<string, unknown> = {
+      client_key: clientKey,
+      content: asText(record.content) || asText(record.body) || "Migrated note",
+    };
+    const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/notes", "POST", body);
+    return r.status >= 200 && r.status < 300;
+  }
+  if (type === "actionItems") {
+    const assignedEmail =
+      ((record.assigned_user as Record<string, unknown>)?.email as string) ||
+      (record.assigned_user_email as string) ||
+      ((record.assignee as Record<string, unknown>)?.email as string) ||
+      null;
+    if (!assignedEmail) return false;
+    const body: Record<string, unknown> = {
+      client_key: clientKey,
+      description: asText(record.description) || "Migrated action item",
+      assigned_user_ids: [{ email: assignedEmail }],
+      due_at: record.due_at || null,
+    };
+    const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/action-items", "POST", body);
+    return r.status >= 200 && r.status < 300;
+  }
+  if (type === "meetings") {
+    const body: Record<string, unknown> = {
+      client_key: clientKey,
+      title: asText(record.title) || "Migrated meeting",
+      scheduled_at: record.scheduled_at || record.start_at || null,
+    };
+    const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/meetings", "POST", body);
+    return r.status >= 200 && r.status < 300;
+  }
+  if (type === "contracts") {
+    const body: Record<string, unknown> = {
+      client_key: clientKey,
+      name: asText(record.name) || "Migrated contract",
+    };
+    const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/contracts", "POST", body);
+    return r.status >= 200 && r.status < 300;
+  }
+  if (type === "deliverables") {
+    const body: Record<string, unknown> = {
+      client_key: clientKey,
+      name: asText(record.name) || "Migrated deliverable",
+    };
+    const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/deliverables", "POST", body);
+    return r.status >= 200 && r.status < 300;
+  }
+  return false;
+}
+
+// --------- Per-config runner ---------
+
+async function runConfig(supabaseAdmin: ReturnType<typeof createClient>, cfg: ConfigRow) {
+  const apiKey = cfg.destination_api_key;
+  const totals = { deleted: 0, created: 0, failures: 0 };
+  const perClient: Array<Record<string, unknown>> = [];
+
+  // Pre-fetch source records once per object type
+  const sourceData: Partial<Record<keyof SelectedObjects, Record<string, unknown>[]>> = {};
+  const types = Object.entries(cfg.selected_objects)
+    .filter(([k, v]) => v && k !== "assessments")
+    .map(([k]) => k as keyof SelectedObjects);
+
+  for (const type of types) {
+    sourceData[type] = await fetchSourceRecords(apiKey, cfg.source_client_id, type);
+  }
+
+  for (let i = 0; i < cfg.destination_client_ids.length; i++) {
+    const destId = cfg.destination_client_ids[i];
+    const destName = cfg.destination_client_names[i] || destId;
+    const clientLog: Record<string, unknown> = { destId, destName, sections: [] as unknown[] };
+
+    for (const type of types) {
+      // 1. delete
+      const delRes = await deleteClientSection(apiKey, destId, type);
+      totals.deleted += delRes.deleted;
+      totals.failures += delRes.failed;
+
+      // 2. recreate
+      let created = 0;
+      let failed = 0;
+      const records = sourceData[type] || [];
+      for (const rec of records) {
+        const ok = await recreate(apiKey, destId, type, rec);
+        if (ok) created++;
+        else failed++;
+        await sleep(DEFAULT_DELAY_MS);
+      }
+      totals.created += created;
+      totals.failures += failed;
+      (clientLog.sections as unknown[]).push({ type, deleted: delRes.deleted, created, failed });
+    }
+    perClient.push(clientLog);
+  }
+
+  const status = totals.failures === 0 ? "success" : totals.created > 0 ? "partial" : "failed";
+
+  await supabaseAdmin.from("lcm_data_reset_runs").insert({
+    config_id: cfg.id,
+    user_id: cfg.user_id,
+    trigger_type: "scheduled",
+    status,
+    finished_at: new Date().toISOString(),
+    total_deleted: totals.deleted,
+    total_created: totals.created,
+    total_failures: totals.failures,
+    details: { perClient } as never,
+  });
+
+  await supabaseAdmin
+    .from("lcm_data_reset_configs")
+    .update({
+      last_run_at: new Date().toISOString(),
+      last_run_status: status,
+      last_run_summary: { ...totals, perClient } as never,
+    })
+    .eq("id", cfg.id);
+
+  return { status, totals };
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  const supabaseAdmin = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+
+  try {
+    const { data: configs, error } = await supabaseAdmin
+      .from("lcm_data_reset_configs")
+      .select("*")
+      .eq("schedule_enabled", true);
+
+    if (error) throw error;
+
+    const results: Array<Record<string, unknown>> = [];
+    for (const cfg of (configs || []) as unknown as ConfigRow[]) {
+      try {
+        const r = await runConfig(supabaseAdmin, cfg);
+        results.push({ config_id: cfg.id, name: cfg.name, ...r });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        results.push({ config_id: cfg.id, name: cfg.name, status: "error", error: msg });
+        await supabaseAdmin.from("lcm_data_reset_runs").insert({
+          config_id: cfg.id,
+          user_id: cfg.user_id,
+          trigger_type: "scheduled",
+          status: "error",
+          finished_at: new Date().toISOString(),
+          error_message: msg,
+        });
+      }
+    }
+
+    return new Response(
+      JSON.stringify({ ok: true, processed: results.length, results }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return new Response(
+      JSON.stringify({ ok: false, error: msg }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
+});

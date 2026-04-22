@@ -65,6 +65,113 @@ export type Database = {
         }
         Relationships: []
       }
+      lcm_data_reset_configs: {
+        Row: {
+          created_at: string
+          destination_api_key: string
+          destination_client_ids: Json
+          destination_client_names: Json
+          id: string
+          last_run_at: string | null
+          last_run_status: string | null
+          last_run_summary: Json | null
+          name: string
+          schedule_enabled: boolean
+          selected_objects: Json
+          source_client_id: string
+          source_client_name: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          destination_api_key: string
+          destination_client_ids?: Json
+          destination_client_names?: Json
+          id?: string
+          last_run_at?: string | null
+          last_run_status?: string | null
+          last_run_summary?: Json | null
+          name?: string
+          schedule_enabled?: boolean
+          selected_objects?: Json
+          source_client_id: string
+          source_client_name: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          destination_api_key?: string
+          destination_client_ids?: Json
+          destination_client_names?: Json
+          id?: string
+          last_run_at?: string | null
+          last_run_status?: string | null
+          last_run_summary?: Json | null
+          name?: string
+          schedule_enabled?: boolean
+          selected_objects?: Json
+          source_client_id?: string
+          source_client_name?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      lcm_data_reset_runs: {
+        Row: {
+          config_id: string
+          details: Json | null
+          error_message: string | null
+          finished_at: string | null
+          id: string
+          started_at: string
+          status: string
+          total_created: number
+          total_deleted: number
+          total_failures: number
+          trigger_type: string
+          user_id: string
+        }
+        Insert: {
+          config_id: string
+          details?: Json | null
+          error_message?: string | null
+          finished_at?: string | null
+          id?: string
+          started_at?: string
+          status: string
+          total_created?: number
+          total_deleted?: number
+          total_failures?: number
+          trigger_type: string
+          user_id: string
+        }
+        Update: {
+          config_id?: string
+          details?: Json | null
+          error_message?: string | null
+          finished_at?: string | null
+          id?: string
+          started_at?: string
+          status?: string
+          total_created?: number
+          total_deleted?: number
+          total_failures?: number
+          trigger_type?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lcm_data_reset_runs_config_id_fkey"
+            columns: ["config_id"]
+            isOneToOne: false
+            referencedRelation: "lcm_data_reset_configs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
