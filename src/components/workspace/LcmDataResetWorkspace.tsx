@@ -1007,6 +1007,54 @@ export function LcmDataResetWorkspace() {
         </div>
       </div>
 
+      {tenantMode === "same" && (
+        <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
+          <div className="flex items-start gap-3">
+            <Save className="mt-0.5 h-5 w-5 text-primary" />
+            <div className="flex-1 space-y-3">
+              <div>
+                <h4 className="text-sm font-semibold text-foreground">
+                  Save this configuration {activeConfigId ? "(updating existing)" : "(new)"}
+                </h4>
+                <p className="text-xs text-muted-foreground">
+                  Stores the gold client, destinations, and selected objects so you can re-run with one click — or schedule it nightly.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+                <input
+                  value={configName}
+                  onChange={(e) => setConfigName(e.target.value)}
+                  placeholder="Configuration name"
+                  className="h-10 rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <label className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 text-xs text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={scheduleNightly}
+                    onChange={(e) => setScheduleNightly(e.target.checked)}
+                  />
+                  <Clock className="h-3.5 w-3.5" />
+                  Run nightly at 2:00 AM ET
+                </label>
+                <button
+                  onClick={handleSaveConfig}
+                  disabled={savingConfig}
+                  className="inline-flex items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {savingConfig && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {activeConfigId ? "Update" : "Save"}
+                </button>
+              </div>
+              {scheduleNightly && (
+                <p className="text-[11px] text-muted-foreground">
+                  Scheduled runs use the tenant API key currently in your session, stored encrypted-at-rest with your config.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="rounded-lg border border-warning/30 bg-warning/10 p-4">
         <div className="flex items-start gap-3">
           <TriangleAlert className="mt-0.5 h-5 w-5 text-warning" />
