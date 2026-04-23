@@ -1880,7 +1880,8 @@ async function migrateRecord(
   destinationMeetingTypes: DestinationMeetingType[] = [],
   deliverableClientIdCache: Map<string, string> = new Map(),
   sourceAssessmentTemplateTitlesById: Map<string, string> = new Map(),
-  destinationAssessmentTemplateIdsByTitle: Map<string, string> = new Map()
+  destinationAssessmentTemplateIdsByTitle: Map<string, string> = new Map(),
+  sameTenantClone = false
 ): Promise<{
   newId?: string;
   recordName: string;
@@ -2506,11 +2507,24 @@ async function migrateRecord(
       record.attendees?.users || record.attendee_users || record.users
     );
     const matchedUserIds: string[] = [];
+    const directSourceUserIds: string[] = [];
     let unresolvedPlatformAttendees = 0;
 
     for (const sourceUserId of sourceUserIds) {
       const sourceEmail = findMemberEmailById(sourceMembers, sourceUserId);
       if (!sourceEmail) {
+        if (sameTenantClone) {
+          directSourceUserIds.push(sourceUserId);
+          warnings.push(
+            buildWarning(
+              destinationClient.name,
+              OBJECT_LABELS.meetings,
+              recordName,
+              `Platform attendee '${sourceUserId}' was attached using the raw source user id because this is a same-tenant clone and no source member email was found.`
+            )
+          );
+          continue;
+        }
         unresolvedPlatformAttendees += 1;
         warnings.push(
           buildWarning(
@@ -2531,6 +2545,18 @@ async function migrateRecord(
         ));
 
       if (!destinationUserId) {
+        if (sameTenantClone) {
+          directSourceUserIds.push(sourceUserId);
+          warnings.push(
+            buildWarning(
+              destinationClient.name,
+              OBJECT_LABELS.meetings,
+              recordName,
+              `Platform attendee '${sourceEmail}' was attached using the raw source user id because this is a same-tenant clone and no destination user match was found.`
+            )
+          );
+          continue;
+        }
         unresolvedPlatformAttendees += 1;
         warnings.push(
           buildWarning(
@@ -2546,23 +2572,32 @@ async function migrateRecord(
       matchedUserIds.push(destinationUserId);
     }
 
-    if (matchedUserIds.length > 0) {
+    const attendeeUserIdsToAttach = [
+      ...new Set([...matchedUserIds, ...directSourceUserIds]),
+    ];
+
+    if (attendeeUserIdsToAttach.length > 0) {
       await sleep(DEFAULT_DELAY_MS);
       await proxyCallWithRetry(
         destinationApiKey,
         `/lifecycle-manager/v1/meetings/${created.id}/attendees/users`,
         "POST",
-        { user_ids: [...new Set(matchedUserIds)] }
+        { user_ids: attendeeUserIdsToAttach }
       );
     }
 
-    if (sourceUserIds.length > 0 || matchedUserIds.length > 0 || unresolvedPlatformAttendees > 0) {
+    if (
+      sourceUserIds.length > 0 ||
+      matchedUserIds.length > 0 ||
+      directSourceUserIds.length > 0 ||
+      unresolvedPlatformAttendees > 0
+    ) {
       warnings.push(
         buildWarning(
           destinationClient.name,
           OBJECT_LABELS.meetings,
           recordName,
-          `Meeting platform attendees processed - matched: ${matchedUserIds.length}, attached: ${[...new Set(matchedUserIds)].length}, unresolved: ${unresolvedPlatformAttendees}.`
+          `Meeting platform attendees processed - mapped: ${matchedUserIds.length}, raw-id fallback: ${directSourceUserIds.length}, attached: ${attendeeUserIdsToAttach.length}, unresolved: ${unresolvedPlatformAttendees}.`
         )
       );
     }
@@ -2912,6 +2947,7 @@ export async function runTenantMigration({
 
   const sourceDeliverableClientIdCache = new Map<string, string>();
   const destinationDeliverableClientIdCache = new Map<string, string>();
+  const sameTenantClone = sourceApiKey.trim() === destinationApiKey.trim();
   const sourceClientLookup = new Map(
     sourceClients.map((client) => [client.id, client])
   );
@@ -3052,7 +3088,8 @@ export async function runTenantMigration({
             destinationMeetingTypes,
             destinationDeliverableClientIdCache,
             sourceAssessmentTemplateTitlesById,
-            destinationAssessmentTemplateIdsByTitle
+            destinationAssessmentTemplateIdsByTitle,
+            sameTenantClone
           );
           progress.objects[type].succeeded += 1;
           totalCreated += 1;
