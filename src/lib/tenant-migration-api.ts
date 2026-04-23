@@ -2502,16 +2502,68 @@ async function migrateRecord(
       );
     }
 
-    const userIds = extractIds(
+    const sourceUserIds = extractIds(
       record.attendees?.users || record.attendee_users || record.users
     );
-    if (userIds.length > 0) {
+    const matchedUserIds: string[] = [];
+    let unresolvedPlatformAttendees = 0;
+
+    for (const sourceUserId of sourceUserIds) {
+      const sourceEmail = findMemberEmailById(sourceMembers, sourceUserId);
+      if (!sourceEmail) {
+        unresolvedPlatformAttendees += 1;
+        warnings.push(
+          buildWarning(
+            destinationClient.name,
+            OBJECT_LABELS.meetings,
+            recordName,
+            `Platform attendee '${sourceUserId}' could not be mapped because no source member email was found.`
+          )
+        );
+        continue;
+      }
+
+      const destinationUserId =
+        findDestinationMemberIdByEmail(destinationMembers, sourceEmail) ||
+        (await findDestinationMemberIdByEmailViaApi(
+          destinationApiKey,
+          sourceEmail
+        ));
+
+      if (!destinationUserId) {
+        unresolvedPlatformAttendees += 1;
+        warnings.push(
+          buildWarning(
+            destinationClient.name,
+            OBJECT_LABELS.meetings,
+            recordName,
+            `Platform attendee '${sourceEmail}' could not be matched to a destination platform user.`
+          )
+        );
+        continue;
+      }
+
+      matchedUserIds.push(destinationUserId);
+    }
+
+    if (matchedUserIds.length > 0) {
       await sleep(DEFAULT_DELAY_MS);
       await proxyCallWithRetry(
         destinationApiKey,
         `/lifecycle-manager/v1/meetings/${created.id}/attendees/users`,
         "POST",
-        { user_ids: userIds }
+        { user_ids: [...new Set(matchedUserIds)] }
+      );
+    }
+
+    if (sourceUserIds.length > 0 || matchedUserIds.length > 0 || unresolvedPlatformAttendees > 0) {
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.meetings,
+          recordName,
+          `Meeting platform attendees processed - matched: ${matchedUserIds.length}, attached: ${[...new Set(matchedUserIds)].length}, unresolved: ${unresolvedPlatformAttendees}.`
+        )
       );
     }
 
@@ -2867,7 +2919,7 @@ export async function runTenantMigration({
     destinationClients.map((client) => [client.id, client])
   );
 
-  if (selectedObjects.assessments) {
+  if (selectedObjects.assessments || selectedObjects.meetings) {
     try {
       destinationMembers = await fetchDestinationMembers(destinationApiKey);
     } catch {
@@ -2875,7 +2927,7 @@ export async function runTenantMigration({
     }
   }
 
-  if (selectedObjects.actionItems) {
+  if (selectedObjects.actionItems || selectedObjects.meetings) {
     try {
       sourceMembers = await fetchDestinationMembers(sourceApiKey);
     } catch {
