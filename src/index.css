@@ -51,6 +51,19 @@
   h1, h2, h3, h4, h5, h6 {
     @apply font-heading;
   }
+
+  /* Keep native select menus readable in the dark app shell. Chromium can
+     otherwise render the popup with a light background while inheriting the
+     page's light text color. */
+  select {
+    color-scheme: dark;
+  }
+
+  select option,
+  select optgroup {
+    background-color: hsl(var(--surface-raised));
+    color: hsl(var(--foreground));
+  }
 }
 
 /* Scrollbar styling */
