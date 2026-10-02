@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  Ban,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -238,13 +239,14 @@ export function TenantMigrationWorkspace({
   const [finalTab, setFinalTab] = useState<FinalTab>("summary");
 
   const [sourceSearch, setSourceSearch] = useState("");
+  const [matchedOnly, setMatchedOnly] = useState(false);
   const [sourcePage, setSourcePage] = useState(1);
   const [errorClientFilter, setErrorClientFilter] = useState("all");
   const [errorObjectFilter, setErrorObjectFilter] = useState("all");
 
   useEffect(() => {
     setSourcePage(1);
-  }, [sourceSearch]);
+  }, [sourceSearch, matchedOnly]);
 
   const mappedClients = useMemo(
     () => clientMappings.filter((mapping) => !mapping.skip && mapping.dstClientId && mapping.dstClientName),
@@ -254,11 +256,16 @@ export function TenantMigrationWorkspace({
   const mappedCount = mappedClients.length;
   const skippedCount = clientMappings.filter((mapping) => mapping.skip || !mapping.dstClientId).length;
 
+  const mappingLookup = useMemo(() => new Map(clientMappings.map((mapping) => [mapping.srcClientId, mapping])), [clientMappings]);
+
   const filteredSourceClients = useMemo(() => {
     const query = sourceSearch.trim().toLowerCase();
-    if (!query) return sourceClients;
-    return sourceClients.filter((client) => client.name.toLowerCase().includes(query));
-  }, [sourceClients, sourceSearch]);
+    return sourceClients.filter((client) => {
+      const mapping = mappingLookup.get(client.id);
+      const isMatched = Boolean(mapping?.dstClientId && !mapping.skip);
+      return (!query || client.name.toLowerCase().includes(query)) && (!matchedOnly || isMatched);
+    });
+  }, [mappingLookup, matchedOnly, sourceClients, sourceSearch]);
 
   const sourceTotalPages = Math.max(1, Math.ceil(filteredSourceClients.length / PAGE_SIZE));
   const pagedSourceClients = filteredSourceClients.slice((sourcePage - 1) * PAGE_SIZE, sourcePage * PAGE_SIZE);
@@ -268,8 +275,6 @@ export function TenantMigrationWorkspace({
     [destinationClients]
   );
   const destinationLookup = useMemo(() => new Map(destinationClients.map((client) => [client.id, client])), [destinationClients]);
-  const mappingLookup = useMemo(() => new Map(clientMappings.map((mapping) => [mapping.srcClientId, mapping])), [clientMappings]);
-
   const selectedObjectCount = useMemo(
     () => Object.values(selectedObjects).filter(Boolean).length,
     [selectedObjects]
@@ -592,11 +597,22 @@ export function TenantMigrationWorkspace({
 
       <div className="flex min-h-[560px] flex-col rounded-lg border border-border bg-card">
         <div className="space-y-3 border-b border-border p-4">
-          <div className="flex items-center gap-2">
-            <h4 className="font-heading text-sm font-bold text-foreground">Source -&gt; Destination Tenant Mapping</h4>
-            <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
-              {sourceClients.length}
-            </span>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <h4 className="font-heading text-sm font-bold text-foreground">Source -&gt; Destination Tenant Mapping</h4>
+              <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
+                {filteredSourceClients.length}{matchedOnly ? ` of ${sourceClients.length}` : ""}
+              </span>
+            </div>
+            <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={matchedOnly}
+                onChange={(event) => setMatchedOnly(event.target.checked)}
+                className="h-3.5 w-3.5 rounded border-border accent-primary"
+              />
+              Show matched clients only
+            </label>
           </div>
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -620,8 +636,8 @@ export function TenantMigrationWorkspace({
                 mapping?.dstClientId && !mapping.skip ? destinationLookup.get(mapping.dstClientId) || null : null;
 
               return (
-                <div key={client.id} className="space-y-3 border-b border-border px-4 py-4">
-                  <div className="flex items-start justify-between gap-3">
+                <div key={client.id} className="border-b border-border px-4 py-3">
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-3">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-foreground">{client.name}</p>
                       <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -629,42 +645,40 @@ export function TenantMigrationWorkspace({
                         <span className="text-[11px] text-muted-foreground">{client.num_hardware_assets} assets</span>
                       </div>
                     </div>
-                  </div>
-
-                  <div
-                    className={classNames(
-                      "rounded-lg border px-3 py-3",
-                      mappedDestination ? "border-primary/30 bg-primary/10" : "border-border bg-surface-raised"
+                    <ArrowRight className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                    <div className="min-w-0">
+                      <select
+                        value={mapping?.skip || !mapping?.dstClientId ? "skip" : mapping.dstClientId}
+                        onChange={(event) => updateMapping(client.id, event.target.value)}
+                        aria-label={`Destination tenant for ${client.name}`}
+                        className={classNames(
+                          "h-9 w-full min-w-0 rounded-md border px-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary",
+                          mappedDestination ? "border-primary/30 bg-primary/10" : "border-border bg-surface-raised"
+                        )}
+                      >
+                        <option value="skip">Do Not Migrate</option>
+                        {destinationOptions.map((destinationClient) => (
+                          <option key={destinationClient.id} value={destinationClient.id}>
+                            {destinationClient.name}
+                          </option>
+                        ))}
+                      </select>
+                      {mappedDestination && (
+                        <p className="mt-1 truncate text-[10px] text-muted-foreground">
+                          {client.num_hardware_assets} assets → {mappedDestination.num_hardware_assets} assets
+                        </p>
+                      )}
+                    </div>
+                    {!mappedDestination && (
+                      <span
+                        title="This source client is currently set to Do Not Migrate."
+                        aria-label="This source client is currently set to Do Not Migrate."
+                        className="rounded-full bg-muted p-1.5 text-muted-foreground"
+                      >
+                        <Ban className="h-4 w-4" aria-hidden="true" />
+                      </span>
                     )}
-                  >
-                    {mappedDestination ? (
-                      <div className="space-y-1 text-xs">
-                        <div className="flex flex-wrap items-center gap-2 text-foreground">
-                          <span className="font-medium">{client.name}</span>
-                          <ArrowRight className="h-3.5 w-3.5 text-primary" />
-                          <span className="font-medium">{mappedDestination.name}</span>
-                        </div>
-                        <div className="text-[11px] text-muted-foreground">
-                          {client.num_hardware_assets} assets -&gt; {mappedDestination.num_hardware_assets} assets
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="text-xs text-muted-foreground">This source client is currently set to Do Not Migrate.</div>
-                    )}
                   </div>
-
-                  <select
-                    value={mapping?.skip || !mapping?.dstClientId ? "skip" : mapping.dstClientId}
-                    onChange={(event) => updateMapping(client.id, event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-raised px-3 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                  >
-                    <option value="skip">Do Not Migrate</option>
-                    {destinationOptions.map((destinationClient) => (
-                      <option key={destinationClient.id} value={destinationClient.id}>
-                        {destinationClient.name}
-                      </option>
-                    ))}
-                  </select>
                 </div>
               );
             })
