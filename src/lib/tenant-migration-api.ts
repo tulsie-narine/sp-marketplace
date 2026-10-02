@@ -1077,11 +1077,17 @@ async function collectClientRelationshipsFromSource(
     if (!goalId) continue;
     const goalName = goalNames.get(goalId) || "Unnamed Goal";
 
-    const initiativeIds = await fetchRelationshipIdList(
-      sourceApiKey,
-      `/lifecycle-manager/v1/goals/${goalId}/initiatives`,
-      "initiative_ids"
-    );
+    let initiativeIds: string[] = [];
+    try {
+      initiativeIds = await fetchRelationshipIdList(
+        sourceApiKey,
+        `/lifecycle-manager/v1/goals/${goalId}/initiatives`,
+        "initiative_ids"
+      );
+    } catch {
+      // Relationship endpoints are optional for migration. A missing or
+      // permission-gated link must not block the records themselves.
+    }
     for (const initiativeId of initiativeIds) {
       pushRelationship({
         clientName: "",
@@ -1094,11 +1100,16 @@ async function collectClientRelationshipsFromSource(
       });
     }
 
-    const meetingIds = await fetchRelationshipIdList(
-      sourceApiKey,
-      `/lifecycle-manager/v1/goals/${goalId}/meetings`,
-      "meeting_ids"
-    );
+    let meetingIds: string[] = [];
+    try {
+      meetingIds = await fetchRelationshipIdList(
+        sourceApiKey,
+        `/lifecycle-manager/v1/goals/${goalId}/meetings`,
+        "meeting_ids"
+      );
+    } catch {
+      // See the initiative relationship note above.
+    }
     for (const meetingId of meetingIds) {
       pushRelationship({
         clientName: "",
@@ -1117,11 +1128,16 @@ async function collectClientRelationshipsFromSource(
     const initiativeName =
       initiativeNames.get(initiativeId) || "Unnamed Initiative";
 
-    const actionItemIds = await fetchRelationshipIdList(
-      sourceApiKey,
-      `/lifecycle-manager/v1/initiatives/${initiativeId}/action-items`,
-      "action_item_ids"
-    );
+    let actionItemIds: string[] = [];
+    try {
+      actionItemIds = await fetchRelationshipIdList(
+        sourceApiKey,
+        `/lifecycle-manager/v1/initiatives/${initiativeId}/action-items`,
+        "action_item_ids"
+      );
+    } catch {
+      // See the initiative relationship note above.
+    }
     for (const actionItemId of actionItemIds) {
       pushRelationship({
         clientName: "",
@@ -1140,11 +1156,16 @@ async function collectClientRelationshipsFromSource(
     if (!meetingId) continue;
     const meetingName = meetingNames.get(meetingId) || "Unnamed Meeting";
 
-    const initiativeIds = await fetchRelationshipIdList(
-      sourceApiKey,
-      `/lifecycle-manager/v1/meetings/${meetingId}/initiatives`,
-      "initiative_ids"
-    );
+    let initiativeIds: string[] = [];
+    try {
+      initiativeIds = await fetchRelationshipIdList(
+        sourceApiKey,
+        `/lifecycle-manager/v1/meetings/${meetingId}/initiatives`,
+        "initiative_ids"
+      );
+    } catch {
+      // See the initiative relationship note above.
+    }
     for (const initiativeId of initiativeIds) {
       pushRelationship({
         clientName: "",
@@ -1156,11 +1177,16 @@ async function collectClientRelationshipsFromSource(
       });
     }
 
-    const actionItemIds = await fetchRelationshipIdList(
-      sourceApiKey,
-      `/lifecycle-manager/v1/meetings/${meetingId}/action-items`,
-      "action_item_ids"
-    );
+    let actionItemIds: string[] = [];
+    try {
+      actionItemIds = await fetchRelationshipIdList(
+        sourceApiKey,
+        `/lifecycle-manager/v1/meetings/${meetingId}/action-items`,
+        "action_item_ids"
+      );
+    } catch {
+      // See the initiative relationship note above.
+    }
     for (const actionItemId of actionItemIds) {
       pushRelationship({
         clientName: "",
@@ -1909,41 +1935,69 @@ async function migrateRecord(
       }
     );
 
-    await sleep(DEFAULT_DELAY_MS);
-    await proxyCallWithRetry(
-      destinationApiKey,
-      `/lifecycle-manager/v1/initiatives/${created.id}/status`,
-      "PUT",
-      { status: asText(record.status) || "New" }
-    );
-    await sleep(DEFAULT_DELAY_MS);
-    await proxyCallWithRetry(
-      destinationApiKey,
-      `/lifecycle-manager/v1/initiatives/${created.id}/priority`,
-      "PUT",
-      { priority: asText(record.priority) || "None" }
-    );
-    await sleep(DEFAULT_DELAY_MS);
-    await proxyCallWithRetry(
-      destinationApiKey,
-      `/lifecycle-manager/v1/initiatives/${created.id}/schedule`,
-      "PUT",
-      { fiscal_quarter: record.fiscal_quarter || null }
-    );
-    await sleep(DEFAULT_DELAY_MS);
-    await proxyCallWithRetry(
-      destinationApiKey,
-      `/lifecycle-manager/v1/initiatives/${created.id}/budget`,
-      "PUT",
-      { budget_line_items: record.budget?.line_items || [] }
-    );
-    await sleep(DEFAULT_DELAY_MS);
-    await proxyCallWithRetry(
-      destinationApiKey,
-      `/lifecycle-manager/v1/initiatives/${created.id}/recurring`,
-      "PUT",
-      { recurring_line_items: record.budget?.recurring_line_items || [] }
-    );
+    const updateInitiativeComponent = async (
+      component: string,
+      endpoint: string,
+      body: ApiBody
+    ) => {
+      try {
+        await sleep(DEFAULT_DELAY_MS);
+        await proxyCallWithRetry(destinationApiKey, endpoint, "PUT", body);
+      } catch (error) {
+        warnings.push(
+          buildWarning(
+            destinationClient.name,
+            OBJECT_LABELS.initiatives,
+            recordName,
+            `${component} could not be copied: ${
+              error instanceof Error ? error.message : "Unknown error"
+            }`
+          )
+        );
+      }
+    };
+
+    if (asText(record.status)) {
+      await updateInitiativeComponent(
+        "Status",
+        `/lifecycle-manager/v1/initiatives/${created.id}/status`,
+        { status: asText(record.status) }
+      );
+    }
+    if (asText(record.priority)) {
+      await updateInitiativeComponent(
+        "Priority",
+        `/lifecycle-manager/v1/initiatives/${created.id}/priority`,
+        { priority: asText(record.priority) }
+      );
+    }
+    if (record.fiscal_quarter != null) {
+      await updateInitiativeComponent(
+        "Schedule",
+        `/lifecycle-manager/v1/initiatives/${created.id}/schedule`,
+        { fiscal_quarter: record.fiscal_quarter }
+      );
+    }
+    const budgetLineItems = Array.isArray(record.budget?.line_items)
+      ? record.budget.line_items
+      : [];
+    if (budgetLineItems.length > 0) {
+      await updateInitiativeComponent(
+        "Budget",
+        `/lifecycle-manager/v1/initiatives/${created.id}/budget`,
+        { budget_line_items: budgetLineItems }
+      );
+    }
+    const recurringLineItems = Array.isArray(record.budget?.recurring_line_items)
+      ? record.budget.recurring_line_items
+      : [];
+    if (recurringLineItems.length > 0) {
+      await updateInitiativeComponent(
+        "Recurring budget",
+        `/lifecycle-manager/v1/initiatives/${created.id}/recurring`,
+        { recurring_line_items: recurringLineItems }
+      );
+    }
 
     return {
       newId: created.id,
@@ -1973,7 +2027,7 @@ async function migrateRecord(
     await proxyCallWithRetry(
       destinationApiKey,
       `/lifecycle-manager/v1/goals/${created.id}`,
-      "PUT",
+      "PATCH",
       {
         title: body.title,
         description: body.description,
@@ -2068,9 +2122,21 @@ async function migrateRecord(
       throw new Error("Skipped - assignees could not be resolved for creation.");
     }
 
+    const actionItemTitle =
+      asText(record.title) ||
+      asText(record.name) ||
+      asText(record.subject) ||
+      asText(record.description) ||
+      "Migrated action item";
+    const actionItemDescription =
+      asText(record.description) || actionItemTitle;
+
     const body = {
       client_key: { id: destinationClientId },
-      description: asText(record.description) || "Migrated action item",
+      title: actionItemTitle,
+      description_json:
+        asText(record.description_json) ||
+        buildProseMirrorJson(actionItemDescription),
       assigned_user_ids: assignedUserIdsPayload,
       due_at: normalizeDueAt(record.due_at),
     };
@@ -2185,8 +2251,7 @@ async function migrateRecord(
 
   if (type === "assessments") {
     const templateId = asText(record.assessment_template_id);
-    const preferredEvaluatorEmail =
-      actionItemAssigneeEmail || extractAssessmentEvaluatorEmail(record) || null;
+    const preferredEvaluatorEmail = extractAssessmentEvaluatorEmail(record);
     const sourceEvaluateUserId = asText(record.evaluate_user_id) || null;
     const evaluatorUserId =
       findDestinationMemberIdByEmail(destinationMembers, preferredEvaluatorEmail) ||
@@ -2219,10 +2284,27 @@ async function migrateRecord(
       throw error;
     }
 
+    const sourceTemplateTitle = templateId
+      ? sourceAssessmentTemplateTitlesById.get(templateId) || null
+      : null;
+    const destinationTemplateId = sourceTemplateTitle
+      ? destinationAssessmentTemplateIdsByTitle.get(
+          normalizeTemplateTitle(sourceTemplateTitle)
+        ) || null
+      : sameTenantClone
+      ? templateId
+      : null;
+
+    if (!destinationTemplateId) {
+      throw new Error(
+        `Skipped - assessment template '${sourceTemplateTitle || templateId}' could not be matched in the destination tenant.`
+      );
+    }
+
     const body = {
       client_key: { id: destinationClientId },
       title: asText(record.title) || "Migrated Assessment",
-      assessment_template_id: templateId,
+      assessment_template_id: destinationTemplateId,
       evaluate_user_id: evaluatorUserId,
       evaluate_at:
         (isIsoDateTime(record.evaluate_at) && record.evaluate_at) ||

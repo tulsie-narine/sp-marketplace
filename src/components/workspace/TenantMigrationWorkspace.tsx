@@ -37,7 +37,7 @@ const OBJECT_OPTIONS: { key: keyof SelectedObjects; label: string }[] = [
   { key: "notes", label: "Notes" },
   { key: "actionItems", label: "Action Items" },
   { key: "contracts", label: "Contracts" },
-  { key: "assessments", label: "Assessment (Coming Soon!)" },
+  { key: "assessments", label: "Assessments" },
   { key: "meetings", label: "Meetings" },
   { key: "deliverables", label: "Deliverables" },
 ];
@@ -80,7 +80,7 @@ const DEFAULT_SELECTED_OBJECTS: SelectedObjects = {
   notes: true,
   actionItems: true,
   contracts: true,
-  assessments: false,
+  assessments: true,
   meetings: true,
   deliverables: true,
 };
@@ -229,7 +229,9 @@ export function TenantMigrationWorkspace({
   const [destinationClients, setDestinationClients] = useState<MigrationClient[]>([]);
   const [clientMappings, setClientMappings] = useState<ClientMapping[]>([]);
   const [selectedObjects, setSelectedObjects] = useState<SelectedObjects>(DEFAULT_SELECTED_OBJECTS);
-  const [actionItemAssigneeEmail, setActionItemAssigneeEmail] = useState("");
+  const [actionItemAssigneeEmail, setActionItemAssigneeEmail] = useState(
+    "tulsie.narine+lmx-demo-halo@scalepad.com"
+  );
   const [migrationProgress, setMigrationProgress] = useState<ClientMigrationProgress[]>([]);
   const [migrationResult, setMigrationResult] = useState<MigrationResult | null>(null);
   const [loadingClients, setLoadingClients] = useState(false);
@@ -745,20 +747,17 @@ export function TenantMigrationWorkspace({
 
       <div className="space-y-3">
         {OBJECT_OPTIONS.map((option) => {
-          const isDisabled = option.key === "assessments";
-
           return (
           <label
             key={option.key}
             className={classNames(
               "flex items-start gap-3 rounded-md border border-border bg-surface-raised px-4 py-3 transition-colors",
-              isDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-primary/40"
+              "cursor-pointer hover:border-primary/40"
             )}
           >
             <input
               type="checkbox"
               checked={selectedObjects[option.key]}
-              disabled={isDisabled}
               onChange={(event) =>
                 setSelectedObjects((prev) => ({
                   ...prev,
@@ -776,7 +775,7 @@ export function TenantMigrationWorkspace({
       {selectedObjects.actionItems && (
         <div className="mt-5 rounded-md border border-border bg-surface-raised p-4">
           <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Default Assignee Email for Action Items
+            Fallback Assignee Email for Action Items
           </label>
           <input
             type="email"
