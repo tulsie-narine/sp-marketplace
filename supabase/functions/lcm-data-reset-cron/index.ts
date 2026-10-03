@@ -372,11 +372,16 @@ async function recreate(
     if (assignedUserIds.length === 0 && assignedEmails.length === 0) return false;
     const body: Record<string, unknown> = {
       client_key: clientKey,
-      description: asText(record.description) || "Migrated action item",
+      title:
+        asText(record.title) ||
+        asText(record.name) ||
+        asText(record.description) ||
+        "Migrated action item",
+      description_json: asText(record.description_json) || null,
       assigned_user_ids:
         assignedEmails.length > 0
           ? assignedEmails.map((email) => ({ email }))
-          : assignedUserIds,
+          : assignedUserIds.map((id) => ({ id })),
       due_at: record.due_at || null,
     };
     const r = await spCallRetry(apiKey, "/lifecycle-manager/v1/action-items", "POST", body);

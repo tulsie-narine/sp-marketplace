@@ -892,36 +892,6 @@ function normalizeDeliverableStatus(value: unknown): "Draft" | "Published" | nul
   return null;
 }
 
-async function resolveListedDeliverableId(
-  apiKey: string,
-  clientId: string,
-  createdId: string,
-  deliverableName: string
-): Promise<string> {
-  const response = await proxyCallWithRetry<{
-    data?: Record<string, unknown>[];
-  }>(
-    apiKey,
-    `/lifecycle-manager/v1/clients/${encodeURIComponent(clientId)}/deliverables`
-  );
-
-  const deliverables = Array.isArray(response.data) ? response.data : [];
-
-  const byId = deliverables.find((item) => asText(item.id) === createdId);
-  if (byId && asText(byId.id)) {
-    return asText(byId.id)!;
-  }
-
-  const byName = deliverables.find((item) => asText(item.name) === deliverableName);
-  if (byName && asText(byName.id)) {
-    return asText(byName.id)!;
-  }
-
-  throw new Error(
-    `Created deliverable '${deliverableName}' could not be resolved from the destination client deliverables list.`
-  );
-}
-
 async function waitForDeliverableSnapshots(
   apiKey: string,
   deliverableId: string,
@@ -1701,14 +1671,33 @@ function countAssessmentTemplateQuestions(template: Record<string, any>) {
   );
 }
 
-export function buildTagCreatePayload(sourceTag: Record<string, any>) {
+function getTagDomains(sourceTag: Record<string, any>): string[] {
+  const domains = Array.isArray(sourceTag.domains)
+    ? sourceTag.domains
+        .map((domain) =>
+          typeof domain === "string"
+            ? domain
+            : isRecord(domain)
+            ? asText(domain.domain) || asText(domain.name)
+            : null
+        )
+        .filter((domain): domain is string => Boolean(domain))
+    : [];
+  const legacyDomain = asText(sourceTag.domain);
+  if (legacyDomain) domains.push(legacyDomain);
+  return [...new Set(domains.map((domain) => domain.trim()).filter(Boolean))];
+}
+
+export function buildTagCreatePayload(
+  sourceTag: Record<string, any>,
+  domain?: string
+) {
+  const resolvedDomain = domain || asText(sourceTag.domain) || undefined;
   return {
     tag: {
       name: asText(sourceTag.name) || "Untitled tag",
-      ...(asText(sourceTag.domain)
-        ? { domain: sourceTag.domain }
-        : {}),
-      ...(sourceTag.color !== undefined ? { color: sourceTag.color } : {}),
+      color: asText(sourceTag.color) || "Primary400",
+      ...(resolvedDomain ? { domain: resolvedDomain } : {}),
     },
   };
 }
@@ -1726,37 +1715,59 @@ async function migrateTags(
 ): Promise<{ created: number; failures: MigrationErrorEntry[] }> {
   const sourceTags = await fetchTags(sourceApiKey);
   const destinationTags = await fetchTags(destinationApiKey);
-  const keyFor = (tag: Record<string, any>) =>
+  const keyFor = (tag: Record<string, any>, domain: string) =>
     `${(asText(tag.name) || "").toLowerCase()}::${(
-      asText(tag.domain) || ""
+      domain || ""
     ).toLowerCase()}`;
-  const destinationKeys = new Set(destinationTags.map(keyFor));
+  const destinationKeys = new Set(
+    destinationTags.flatMap((tag) =>
+      getTagDomains(tag).map((domain) => keyFor(tag, domain))
+    )
+  );
   const failures: MigrationErrorEntry[] = [];
   let created = 0;
 
   for (const tag of sourceTags) {
-    const key = keyFor(tag);
-    if (!key.startsWith("::") && destinationKeys.has(key)) continue;
-    try {
-      await proxyCallWithRetry(
-        destinationApiKey,
-        "/lifecycle-manager/v1/tags",
-        "POST",
-        buildTagCreatePayload(tag)
-      );
-      destinationKeys.add(key);
-      created += 1;
-    } catch (error) {
+    const domains = getTagDomains(tag);
+    if (domains.length === 0) {
       failures.push({
         clientName: "Account",
         objectType: "Tags",
         recordName: asText(tag.name) || "Untitled tag",
-        errorCode: "TAG_CREATE_FAILED",
-        errorDetail: error instanceof Error ? error.message : "Unknown error",
+        errorCode: "TAG_DOMAIN_MISSING",
+        errorDetail: "Source tag did not include any supported domains.",
         endpoint: "/lifecycle-manager/v1/tags",
         method: "POST",
         requestPayload: buildTagCreatePayload(tag),
       });
+      continue;
+    }
+
+    for (const domain of domains) {
+      const key = keyFor(tag, domain);
+      if (destinationKeys.has(key)) continue;
+      const requestPayload = buildTagCreatePayload(tag, domain);
+      try {
+        await proxyCallWithRetry(
+          destinationApiKey,
+          "/lifecycle-manager/v1/tags",
+          "POST",
+          requestPayload
+        );
+        destinationKeys.add(key);
+        created += 1;
+      } catch (error) {
+        failures.push({
+          clientName: "Account",
+          objectType: "Tags",
+          recordName: `${asText(tag.name) || "Untitled tag"} (${domain})`,
+          errorCode: "TAG_CREATE_FAILED",
+          errorDetail: error instanceof Error ? error.message : "Unknown error",
+          endpoint: "/lifecycle-manager/v1/tags",
+          method: "POST",
+          requestPayload,
+        });
+      }
     }
   }
 
@@ -2292,7 +2303,7 @@ async function fetchObjectRecords(
     await sleep(DEFAULT_DELAY_MS);
     const detailResponse = await proxyCallWithRetry<Record<string, any>>(
       apiKey,
-      `${endpointBase}/${item.id}${type === "assessments" ? "?include=children" : ""}`
+      `${endpointBase}/${item.id}`
     );
     const detailRecord =
       (type === "meetings" &&
@@ -2560,9 +2571,9 @@ async function migrateRecord(
       sourceAssigneeEmails.length > 0
         ? sourceAssigneeEmails.map((email) => ({ email }))
         : fallbackAssigneeUserId
-        ? [fallbackAssigneeUserId]
+        ? [{ id: fallbackAssigneeUserId }]
         : sourceAssigneeIds.length > 0
-        ? sourceAssigneeIds
+        ? sourceAssigneeIds.map((id) => ({ id }))
         : [];
 
     if (assignedUserIdsPayload.length === 0) {
@@ -3195,7 +3206,9 @@ async function migrateRecord(
         destinationApiKey,
         `/lifecycle-manager/v1/meetings/${created.id}/attendees/contacts`,
         "POST",
-        { contact_ids: [...new Set(matchedContactIds)] }
+        {
+          contact_keys: [...new Set(matchedContactIds)].map((id) => ({ id })),
+        }
       );
     }
 
@@ -3271,16 +3284,10 @@ async function migrateRecord(
       if (!snapshotResult.ready) {
         throw new Error(snapshotResult.detail || "Deliverable snapshots did not settle.");
       }
-      const listedDeliverableId = await resolveListedDeliverableId(
-        destinationApiKey,
-        deliverableClientId,
-        createdId,
-        getRecordName(record, "Migrated Deliverable")
-      );
       await sleep(DEFAULT_DELAY_MS);
       await proxyCallWithRetry(
         destinationApiKey,
-        `/lifecycle-manager/v1/deliverables/${listedDeliverableId}`,
+        `/lifecycle-manager/v1/deliverables/${createdId}`,
         "PATCH",
         { status: sourceDeliverableStatus }
       );
@@ -3415,7 +3422,12 @@ async function createRelationships(
         return;
       }
 
-      await proxyCallWithRetry(destinationApiKey, endpoint, "PUT");
+      const method =
+        item.type === "Initiative ↔ Action Item" ||
+        item.type === "Meeting ↔ Action Item"
+          ? "POST"
+          : "PUT";
+      await proxyCallWithRetry(destinationApiKey, endpoint, method);
       log.push({
         clientName,
         type: item.type,
