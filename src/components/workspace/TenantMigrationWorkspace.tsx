@@ -904,6 +904,15 @@ export function TenantMigrationWorkspace({
 
   const renderLiveProgress = () => (
     <div className="space-y-4">
+      {migrationProgress.some((client) => client.objects.relationships.status === "running") && (
+        <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 text-sm text-primary">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          <div>
+            <p className="font-medium">Building relationships — almost finished…</p>
+            <p className="text-xs text-primary/75">Linking migrated goals, initiatives, meetings, action items, and other records.</p>
+          </div>
+        </div>
+      )}
       <div className="rounded-lg border border-border bg-card p-5">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
@@ -954,7 +963,10 @@ export function TenantMigrationWorkspace({
           );
           const overallPercent = knownTotal > 0 ? Math.min(100, (completedTotal / knownTotal) * 100) : 0;
           const currentResource = clientResources.find((item) => item.objectProgress.status === "running");
-          const currentLabel = currentResource
+          const relationshipRunning = client.objects.relationships.status === "running";
+          const currentLabel = relationshipRunning
+            ? "Building relationships"
+            : currentResource
             ? `${currentResource.resource.label} ${currentResource.objectProgress.total > 0 ? `${currentResource.objectProgress.succeeded}/${currentResource.objectProgress.total}` : "discovering"}`
             : activeClient ? "Preparing" : "Complete";
           return (
