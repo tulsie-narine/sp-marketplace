@@ -3,7 +3,24 @@ import { describe, expect, it } from "vitest";
 import {
   buildAssessmentTemplateCreatePayload,
   buildContractCreatePayload,
+  buildTagCreatePayload,
 } from "./tenant-migration-api";
+
+describe("buildTagCreatePayload", () => {
+  it("wraps the tag and excludes tenant-scoped identifiers", () => {
+    const payload = buildTagCreatePayload({
+      tag_id: "source-tag",
+      name: "Security",
+      domain: "client",
+      color: "blue",
+    });
+
+    expect(payload).toEqual({
+      tag: { name: "Security", domain: "client", color: "blue" },
+    });
+    expect(payload.tag).not.toHaveProperty("tag_id");
+  });
+});
 
 describe("buildAssessmentTemplateCreatePayload", () => {
   it("removes tenant-scoped IDs and preserves the template structure", () => {

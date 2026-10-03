@@ -42,6 +42,7 @@ export interface SelectedObjects {
   assessments: boolean;
   meetings: boolean;
   deliverables: boolean;
+  tags: boolean;
 }
 
 export type ProgressStatus =
@@ -1686,6 +1687,68 @@ function normalizeTemplateTitle(value: string | null | undefined) {
   if (!value) return null;
   const normalized = value.trim().toLowerCase().replace(/\s+/g, " ");
   return normalized || null;
+}
+
+export function buildTagCreatePayload(sourceTag: Record<string, any>) {
+  return {
+    tag: {
+      name: asText(sourceTag.name) || "Untitled tag",
+      ...(asText(sourceTag.domain)
+        ? { domain: sourceTag.domain }
+        : {}),
+      ...(sourceTag.color !== undefined ? { color: sourceTag.color } : {}),
+    },
+  };
+}
+
+async function fetchTags(apiKey: string): Promise<Record<string, any>[]> {
+  const response = await proxyCallWithRetry<{
+    data?: Record<string, any>[];
+  }>(apiKey, "/lifecycle-manager/v1/tags");
+  return Array.isArray(response.data) ? response.data : [];
+}
+
+async function migrateTags(
+  sourceApiKey: string,
+  destinationApiKey: string
+): Promise<{ created: number; failures: MigrationErrorEntry[] }> {
+  const sourceTags = await fetchTags(sourceApiKey);
+  const destinationTags = await fetchTags(destinationApiKey);
+  const keyFor = (tag: Record<string, any>) =>
+    `${(asText(tag.name) || "").toLowerCase()}::${(
+      asText(tag.domain) || ""
+    ).toLowerCase()}`;
+  const destinationKeys = new Set(destinationTags.map(keyFor));
+  const failures: MigrationErrorEntry[] = [];
+  let created = 0;
+
+  for (const tag of sourceTags) {
+    const key = keyFor(tag);
+    if (!key.startsWith("::") && destinationKeys.has(key)) continue;
+    try {
+      await proxyCallWithRetry(
+        destinationApiKey,
+        "/lifecycle-manager/v1/tags",
+        "POST",
+        buildTagCreatePayload(tag)
+      );
+      destinationKeys.add(key);
+      created += 1;
+    } catch (error) {
+      failures.push({
+        clientName: "Account",
+        objectType: "Tags",
+        recordName: asText(tag.name) || "Untitled tag",
+        errorCode: "TAG_CREATE_FAILED",
+        errorDetail: error instanceof Error ? error.message : "Unknown error",
+        endpoint: "/lifecycle-manager/v1/tags",
+        method: "POST",
+        requestPayload: buildTagCreatePayload(tag),
+      });
+    }
+  }
+
+  return { created, failures };
 }
 
 async function fetchAssessmentTemplates(
@@ -3396,6 +3459,26 @@ export async function runTenantMigration({
   const destinationClientLookup = new Map(
     destinationClients.map((client) => [client.id, client])
   );
+
+  if (selectedObjects.tags) {
+    try {
+      const tagResult = await migrateTags(sourceApiKey, destinationApiKey);
+      totalCreated += tagResult.created;
+      totalFailures += tagResult.failures.length;
+      allErrors.push(...tagResult.failures);
+    } catch (error) {
+      totalFailures += 1;
+      allErrors.push({
+        clientName: "Account",
+        objectType: "Tags",
+        recordName: "Tag catalog",
+        errorCode: "TAG_DISCOVERY_FAILED",
+        errorDetail: error instanceof Error ? error.message : "Unknown error",
+        endpoint: "/lifecycle-manager/v1/tags",
+        method: "GET",
+      });
+    }
+  }
 
   if (selectedObjects.assessments || selectedObjects.meetings) {
     try {

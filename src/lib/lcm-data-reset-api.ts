@@ -95,6 +95,7 @@ export const DEFAULT_RESET_SELECTED_OBJECTS: SelectedObjects = {
   assessments: true,
   meetings: true,
   deliverables: true,
+  tags: false,
 };
 
 function toCleanupClient(client: MigrationClient): CleanupClient {

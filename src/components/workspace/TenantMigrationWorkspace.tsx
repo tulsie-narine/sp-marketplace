@@ -42,6 +42,7 @@ const OBJECT_OPTIONS: { key: keyof SelectedObjects; label: string }[] = [
   { key: "assessments", label: "Assessments" },
   { key: "meetings", label: "Meetings" },
   { key: "deliverables", label: "Deliverables" },
+  { key: "tags", label: "Tags" },
 ];
 
 type FinalTab = (typeof FINAL_TABS)[number];
@@ -85,6 +86,7 @@ const DEFAULT_SELECTED_OBJECTS: SelectedObjects = {
   assessments: true,
   meetings: true,
   deliverables: true,
+  tags: true,
 };
 
 function classNames(...values: Array<string | false | null | undefined>) {
@@ -766,6 +768,7 @@ export function TenantMigrationWorkspace({
                 assessments: false,
                 meetings: false,
                 deliverables: false,
+                tags: false,
               })
             }
             className="text-muted-foreground transition-colors hover:text-foreground"
@@ -775,8 +778,11 @@ export function TenantMigrationWorkspace({
         </div>
       </div>
 
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Client data
+      </p>
       <div className="space-y-3">
-        {OBJECT_OPTIONS.map((option) => {
+        {OBJECT_OPTIONS.filter((option) => option.key !== "tags").map((option) => {
           return (
           <label
             key={option.key}
@@ -800,6 +806,49 @@ export function TenantMigrationWorkspace({
           </label>
           );
         })}
+      </div>
+
+      <div className="mt-6 border-t border-border pt-5">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Account resources
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Shared resources are migrated once for the destination tenant.
+            </p>
+          </div>
+          <span className="rounded-full bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-600">
+            CRUD aware
+          </span>
+        </div>
+        <div className="space-y-3">
+          {OBJECT_OPTIONS.filter((option) => option.key === "tags").map((option) => (
+            <label
+              key={option.key}
+              className={classNames(
+                "flex items-start gap-3 rounded-md border border-border bg-surface-raised px-4 py-3 transition-colors",
+                "cursor-pointer hover:border-primary/40"
+              )}
+            >
+              <input
+                type="checkbox"
+                checked={selectedObjects[option.key]}
+                onChange={(event) =>
+                  setSelectedObjects((prev) => ({
+                    ...prev,
+                    [option.key]: event.target.checked,
+                  }))
+                }
+                className="mt-0.5 accent-primary"
+              />
+              <span className="text-sm text-foreground">{option.label}</span>
+            </label>
+          ))}
+        </div>
+        <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
+          Assessment templates are automatically copied when Assessments or Deliverables are selected.
+        </div>
       </div>
 
       {requiresPrimaryDestinationUser && (
