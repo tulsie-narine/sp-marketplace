@@ -162,6 +162,10 @@ interface AssessmentTemplateOverview {
   title: string;
 }
 
+interface AssessmentTemplateDetail extends AssessmentTemplateOverview {
+  template: Record<string, any>;
+}
+
 interface PendingRelationship {
   clientName: string;
   type: RelationshipLogEntry["type"];
@@ -1698,6 +1702,151 @@ async function fetchAssessmentTemplates(
       return id && title ? { id, title } : null;
     })
     .filter((item): item is AssessmentTemplateOverview => Boolean(item));
+}
+
+async function fetchAssessmentTemplateDetail(
+  apiKey: string,
+  templateId: string
+): Promise<AssessmentTemplateDetail> {
+  const response = await proxyCallWithRetry<Record<string, any>>(
+    apiKey,
+    `/lifecycle-manager/v1/assessment-templates/${encodeURIComponent(templateId)}`
+  );
+  const template = isRecord(response.assessment_template)
+    ? response.assessment_template
+    : response;
+  const id = asText(template.assessment_template_id) || templateId;
+  const title = asText(template.title) || "Untitled assessment template";
+  return { id, title, template };
+}
+
+/**
+ * Build the cross-tenant create body. Assessment template IDs are tenant
+ * scoped, so copying them would make the destination reject the request.
+ */
+export function buildAssessmentTemplateCreatePayload(
+  sourceTemplate: Record<string, any>
+) {
+  const categories = Array.isArray(sourceTemplate.categories)
+    ? sourceTemplate.categories
+    : [];
+
+  return {
+    assessment_template: {
+      ...(asText(sourceTemplate.scope)
+        ? { scope: sourceTemplate.scope }
+        : {}),
+      title: asText(sourceTemplate.title) || "Untitled assessment template",
+      ...(sourceTemplate.description !== undefined
+        ? { description: sourceTemplate.description }
+        : {}),
+      ...(sourceTemplate.is_category_weight_evenly_distributed !== undefined
+        ? {
+            is_category_weight_evenly_distributed:
+              sourceTemplate.is_category_weight_evenly_distributed,
+          }
+        : {}),
+      categories: categories.map((category: Record<string, any>) => ({
+        title: asText(category.title) || "Untitled category",
+        ...(category.description !== undefined
+          ? { description: category.description }
+          : {}),
+        ...(category.is_question_weight_evenly_distributed !== undefined
+          ? {
+              is_question_weight_evenly_distributed:
+                category.is_question_weight_evenly_distributed,
+            }
+          : {}),
+        ...(category.weight_in_percentage !== undefined
+          ? { weight_in_percentage: category.weight_in_percentage }
+          : {}),
+        questions: (Array.isArray(category.questions)
+          ? category.questions
+          : []
+        ).map((question: Record<string, any>) => ({
+          title: asText(question.title) || "Untitled question",
+          ...(question.description !== undefined
+            ? { description: question.description }
+            : {}),
+          ...(question.remediation_tips !== undefined
+            ? { remediation_tips: question.remediation_tips }
+            : {}),
+          ...(question.scoring_instructions !== undefined
+            ? { scoring_instructions: question.scoring_instructions }
+            : {}),
+          ...(question.criterion_label_type_enum !== undefined
+            ? { criterion_label_type_enum: question.criterion_label_type_enum }
+            : {}),
+          ...(question.weight_in_percentage !== undefined
+            ? { weight_in_percentage: question.weight_in_percentage }
+            : {}),
+          // The source response does not reliably expose tag IDs. An empty
+          // array is valid and avoids leaking IDs from the source tenant.
+          tag_ids: [],
+          criteria: (Array.isArray(question.criteria)
+            ? question.criteria
+            : []
+          ).map((criterion: Record<string, any>) => ({
+            ...(criterion.label_enum !== undefined
+              ? { label_enum: criterion.label_enum }
+              : {}),
+            ...(criterion.description !== undefined
+              ? { description: criterion.description }
+              : {}),
+          })),
+        })),
+      })),
+    },
+  };
+}
+
+async function provisionMissingAssessmentTemplates(
+  sourceApiKey: string,
+  destinationApiKey: string,
+  sourceTemplates: AssessmentTemplateOverview[],
+  destinationTemplates: AssessmentTemplateOverview[]
+): Promise<AssessmentTemplateOverview[]> {
+  const destinationByTitle = new Map(
+    destinationTemplates.map((template) => [
+      normalizeTemplateTitle(template.title),
+      template,
+    ])
+  );
+  const result = [...destinationTemplates];
+
+  for (const sourceTemplate of sourceTemplates) {
+    const key = normalizeTemplateTitle(sourceTemplate.title);
+    if (!key || destinationByTitle.has(key)) continue;
+
+    const detail = await fetchAssessmentTemplateDetail(
+      sourceApiKey,
+      sourceTemplate.id
+    );
+    const created = await proxyCall<Record<string, any>>(
+      destinationApiKey,
+      "/lifecycle-manager/v1/assessment-templates",
+      "POST",
+      buildAssessmentTemplateCreatePayload(detail.template)
+    );
+    const createdTemplate = isRecord(created.assessment_template)
+      ? created.assessment_template
+      : created;
+    const createdId =
+      asText(createdTemplate.assessment_template_id) ||
+      asText(createdTemplate.id);
+
+    if (!createdId) {
+      throw new Error(
+        `Assessment template "${sourceTemplate.title}" was created but the API did not return its destination ID.`
+      );
+    }
+
+    const provisioned = { id: createdId, title: sourceTemplate.title };
+    destinationByTitle.set(key, provisioned);
+    result.push(provisioned);
+  }
+
+  return result;
 }
 
 function cloneJsonValue<T>(value: T): T {
@@ -3300,6 +3449,15 @@ export async function runTenantMigration({
     }
   }
 
+  if (selectedObjects.assessments || selectedObjects.deliverables) {
+    destinationAssessmentTemplates = await provisionMissingAssessmentTemplates(
+      sourceApiKey,
+      destinationApiKey,
+      sourceAssessmentTemplates,
+      destinationAssessmentTemplates
+    );
+  }
+
   const sourceAssessmentTemplateTitlesById = new Map(
     sourceAssessmentTemplates.map((template) => [template.id, template.title])
   );
@@ -3317,7 +3475,6 @@ export async function runTenantMigration({
   );
 
   if (selectedObjects.assessments) {
-    const missingTemplates = new Set<string>();
     for (const mapping of mappings) {
       const sourceClient = sourceClientLookup.get(mapping.srcClientId);
       if (!sourceClient) continue;
@@ -3328,20 +3485,6 @@ export async function runTenantMigration({
         sourceDeliverableClientIdCache
       );
       assessmentPreflightRecords.set(sourceClient.id, assessments);
-      for (const assessment of assessments) {
-        const templateId = asText(assessment.assessment_template_id);
-        const title = templateId
-          ? sourceAssessmentTemplateTitlesById.get(templateId)
-          : null;
-        if (!title || !destinationAssessmentTemplateIdsByTitle.has(normalizeTemplateTitle(title) || "")) {
-          missingTemplates.add(title || templateId || "Unknown assessment template");
-        }
-      }
-    }
-    if (missingTemplates.size > 0) {
-      throw new Error(
-        `Assessment migration blocked: destination templates are missing: ${[...missingTemplates].join(", ")}. Provision these templates in the destination tenant first.`
-      );
     }
   }
 
