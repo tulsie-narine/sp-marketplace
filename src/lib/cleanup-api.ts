@@ -132,8 +132,9 @@ export async function fetchAllClients(apiKey: string): Promise<CleanupClient[]> 
     const lifecycleByName = new Map(
       lifecycleClients
         .map((client) => {
-          const name = String(client.name || client.client?.name || "").trim().toLowerCase();
-          const id = client.id || client.client?.id;
+          const nestedClient = client.client && typeof client.client === "object" ? client.client : null;
+          const name = String(client.name || nestedClient?.display_name || nestedClient?.name || "").trim().toLowerCase();
+          const id = nestedClient?.client_id || client.id || nestedClient?.id;
           return name && id ? [name, String(id)] as const : null;
         })
         .filter((entry): entry is readonly [string, string] => Boolean(entry))

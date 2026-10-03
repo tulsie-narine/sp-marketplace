@@ -533,8 +533,9 @@ export async function fetchAllClients(
     const lifecycleByName = new Map(
       lifecycleClients
         .map((client) => {
-          const name = asText(client.name) || (isRecord(client.client) ? asText(client.client.name) : null);
-          const id = asText(client.id) || (isRecord(client.client) ? asText(client.client.id) : null);
+          const nestedClient = isRecord(client.client) ? client.client : null;
+          const name = asText(client.name) || asText(nestedClient?.display_name) || asText(nestedClient?.name);
+          const id = asText(nestedClient?.client_id) || asText(client.id) || asText(nestedClient?.id);
           return name && id ? [name.trim().toLowerCase(), id] as const : null;
         })
         .filter((entry): entry is readonly [string, string] => Boolean(entry))
