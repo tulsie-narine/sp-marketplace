@@ -1016,7 +1016,7 @@ export function TenantMigrationWorkspace({
                 <thead className="border-b border-border bg-surface-raised text-muted-foreground">
                   <tr>
                     <th className="px-4 py-3 font-medium">Client</th>
-                    {OBJECT_OPTIONS.map((option) => (
+                    {OBJECT_OPTIONS.filter((option) => option.key !== "tags").map((option) => (
                       <th key={option.key} className="px-4 py-3 font-medium">{OBJECT_LABELS[option.key]}</th>
                     ))}
                     <th className="px-4 py-3 font-medium">Status</th>
@@ -1028,8 +1028,8 @@ export function TenantMigrationWorkspace({
                       <td className="px-4 py-3 text-foreground">
                         {summary.clientName} → {summary.destinationClientName}
                       </td>
-                      {OBJECT_OPTIONS.map((option) => {
-                        const count = summary.counts[option.key];
+                      {OBJECT_OPTIONS.filter((option) => option.key !== "tags").map((option) => {
+                        const count = summary.counts[option.key as MigrationObjectType] ?? { succeeded: 0, total: 0 };
                         const complete = count.total === 0 || count.succeeded === count.total;
                         return (
                           <td key={option.key} className="px-4 py-3">
