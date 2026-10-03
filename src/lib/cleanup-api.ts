@@ -244,6 +244,38 @@ async function fetchRecordIds(
 ): Promise<string[]> {
   const ids: string[] = [];
 
+  const matchesClient = (item: any) => {
+    const candidates = [
+      item?.client?.id,
+      item?.client?.client_id,
+      item?.client_id,
+      item?.clientId,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value));
+    return candidates.includes(String(clientId));
+  };
+
+  const fetchUnfilteredIds = async () => {
+    const fallbackIds: string[] = [];
+    let fallbackCursor: string | null = null;
+    do {
+      const baseEndpoint = config.listEndpoint(clientId).split("?")[0];
+      const params = new URLSearchParams({ page_size: "100" });
+      if (fallbackCursor) params.set("cursor", fallbackCursor);
+      const fallbackJson = await proxyCall(
+        apiKey,
+        `${baseEndpoint}?${params.toString()}`
+      );
+      for (const item of fallbackJson.data || []) {
+        if (item.id && matchesClient(item)) fallbackIds.push(item.id);
+      }
+      fallbackCursor = fallbackJson.next_cursor || null;
+      if (fallbackCursor) await sleep(DELAY_MS);
+    } while (fallbackCursor);
+    return fallbackIds;
+  };
+
   if (!config.paginated) {
     const json = await proxyCall(apiKey, config.listEndpoint(clientId));
     for (const item of json.data || []) {
@@ -252,17 +284,26 @@ async function fetchRecordIds(
     return ids;
   }
 
-  let cursor: string | null = null;
-  do {
-    let url = config.listEndpoint(clientId);
-    if (cursor) url += `&cursor=${cursor}`;
-    const json = await proxyCall(apiKey, url);
-    for (const item of json.data || []) {
-      if (item.id) ids.push(item.id);
-    }
-    cursor = json.next_cursor || null;
-    if (cursor) await sleep(DELAY_MS);
-  } while (cursor);
+  try {
+    let cursor: string | null = null;
+    do {
+      let url = config.listEndpoint(clientId);
+      if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
+      const json = await proxyCall(apiKey, url);
+      for (const item of json.data || []) {
+        if (item.id) ids.push(item.id);
+      }
+      cursor = json.next_cursor || null;
+      if (cursor) await sleep(DELAY_MS);
+    } while (cursor);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (!/422|ClientId does not exist/i.test(detail)) throw error;
+    // Some LMX tenants reject the documented client filter even when the
+    // client exists. Scan the paginated collection and match its embedded
+    // client.id instead of failing before deletion can begin.
+    return fetchUnfilteredIds();
+  }
 
   return ids;
 }
