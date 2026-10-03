@@ -669,22 +669,58 @@ function extractUserName(record: Record<string, unknown>) {
 export async function fetchDestinationUsers(
   apiKey: string
 ): Promise<DestinationUserOption[]> {
-  const users = await fetchAllPages<Record<string, unknown>>(apiKey, (cursor) => {
-    const params = new URLSearchParams({ page_size: "200" });
-    if (cursor) params.set("cursor", cursor);
-    return `/lifecycle-manager/v1/users?${params.toString()}`;
-  });
+  const fetchUserPages = async (endpointBase: string) => {
+    const users: Record<string, unknown>[] = [];
+    let cursor: string | null = null;
+    do {
+      const params = new URLSearchParams({
+        page_size: "200",
+        include_disabled: "true",
+      });
+      if (cursor) params.set("cursor", cursor);
+      const response = await proxyCallWithRetry<Record<string, unknown>>(
+        apiKey,
+        `${endpointBase}?${params.toString()}`
+      );
+      const page =
+        (Array.isArray(response.data) && response.data) ||
+        (Array.isArray(response.users) && response.users) ||
+        (Array.isArray(response.items) && response.items) ||
+        (Array.isArray(response.results) && response.results) ||
+        [];
+      users.push(...(page as Record<string, unknown>[]));
+      cursor = asText(response.next_cursor);
+    } while (cursor);
+    return users;
+  };
+
+  let users = await fetchUserPages("/lifecycle-manager/v1/users");
+  if (users.length === 0) {
+    // Some accounts expose the same selectable people through the account-team
+    // contract. Keep this as a read-only fallback for older tenant payloads.
+    users = await fetchUserPages("/lifecycle-manager/v1/account-team/members");
+  }
 
   return users
-    .map((user) => {
-      const id = asText(user.id);
+    .map((rawUser) => {
+      const user =
+        (isRecord(rawUser.user) && rawUser.user) ||
+        (isRecord(rawUser.member) && rawUser.member) ||
+        rawUser;
+      const id =
+        asText(user.id) ||
+        asText(rawUser.user_id) ||
+        asText(rawUser.account_user_id) ||
+        asText(rawUser.member_id);
       const email =
         asText(user.email) ||
-        asText((user.contact_info as Record<string, unknown>)?.email);
+        asText((user.contact_info as Record<string, unknown>)?.email) ||
+        asText(rawUser.email);
       if (!id) return null;
       return { id, email: email?.toLowerCase() || null, name: extractUserName(user) };
     })
     .filter((user): user is DestinationUserOption => Boolean(user))
+    .filter((user, index, all) => all.findIndex((candidate) => candidate.id === user.id) === index)
     .sort((a, b) => `${a.name} ${a.email || ""}`.localeCompare(`${b.name} ${b.email || ""}`));
 }
 
