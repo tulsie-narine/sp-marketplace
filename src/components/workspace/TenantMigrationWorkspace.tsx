@@ -17,6 +17,7 @@ import {
   autoMatchClientMappings,
   buildInitialClientProgress,
   fetchAllClients,
+  fetchDestinationUsers,
   maskApiKey,
   OBJECT_LABELS,
   runTenantMigration,
@@ -25,6 +26,7 @@ import {
   type MigrationClient,
   type MigrationObjectType,
   type MigrationResult,
+  type DestinationUserOption,
   type RelationshipLogEntry,
   type SelectedObjects,
 } from "@/lib/tenant-migration-api";
@@ -229,6 +231,10 @@ export function TenantMigrationWorkspace({
   const [destinationClients, setDestinationClients] = useState<MigrationClient[]>([]);
   const [clientMappings, setClientMappings] = useState<ClientMapping[]>([]);
   const [selectedObjects, setSelectedObjects] = useState<SelectedObjects>(DEFAULT_SELECTED_OBJECTS);
+  const [destinationUsers, setDestinationUsers] = useState<DestinationUserOption[]>([]);
+  const [selectedAssessmentEvaluatorUserId, setSelectedAssessmentEvaluatorUserId] = useState("");
+  const [loadingDestinationUsers, setLoadingDestinationUsers] = useState(false);
+  const [destinationUsersError, setDestinationUsersError] = useState<string | null>(null);
   const [actionItemAssigneeEmail, setActionItemAssigneeEmail] = useState(
     "tulsie.narine+lmx-demo-halo@scalepad.com"
   );
@@ -283,6 +289,30 @@ export function TenantMigrationWorkspace({
   );
   const requiresAssigneeEmail = selectedObjects.actionItems;
   const hasValidAssigneeEmail = actionItemAssigneeEmail.trim().length > 0;
+  const hasAssessmentEvaluator = selectedAssessmentEvaluatorUserId.trim().length > 0;
+
+  useEffect(() => {
+    if (!selectedObjects.assessments || !destinationApiKey || destinationUsers.length > 0) return;
+    let cancelled = false;
+    setLoadingDestinationUsers(true);
+    setDestinationUsersError(null);
+    fetchDestinationUsers(destinationApiKey)
+      .then((users) => {
+        if (cancelled) return;
+        setDestinationUsers(users);
+        setSelectedAssessmentEvaluatorUserId((current) => current || users[0]?.id || "");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setDestinationUsersError(error instanceof Error ? error.message : "Could not load destination users.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDestinationUsers(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [destinationApiKey, destinationUsers.length, selectedObjects.assessments]);
 
   const completedClients = useMemo(
     () =>
@@ -411,6 +441,7 @@ export function TenantMigrationWorkspace({
         sourceClients,
         destinationClients,
         actionItemAssigneeEmail: selectedObjects.actionItems ? actionItemAssigneeEmail.trim() || null : null,
+        assessmentEvaluatorUserId: selectedObjects.assessments ? selectedAssessmentEvaluatorUserId : null,
         onClientProgress: (clientIndex, progress) => {
           setMigrationProgress((prev) => prev.map((item, index) => (index === clientIndex ? progress : item)));
         },
@@ -788,6 +819,37 @@ export function TenantMigrationWorkspace({
         </div>
       )}
 
+      {selectedObjects.assessments && (
+        <div className="mt-5 rounded-md border border-primary/30 bg-primary/5 p-4">
+          <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Destination user for assessments
+          </label>
+          <p className="mb-3 text-xs text-muted-foreground">
+            Choose the user recorded as the primary evaluator on new destination assessments.
+          </p>
+          <select
+            aria-label="Destination user for assessments"
+            value={selectedAssessmentEvaluatorUserId}
+            onChange={(event) => setSelectedAssessmentEvaluatorUserId(event.target.value)}
+            disabled={loadingDestinationUsers || destinationUsers.length === 0}
+            className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            <option value="">
+              {loadingDestinationUsers ? "Loading destination users…" : "Select a destination user"}
+            </option>
+            {destinationUsers.map((user) => (
+              <option key={user.id} value={user.id}>
+                {user.name}{user.email ? ` · ${user.email}` : ""}
+              </option>
+            ))}
+          </select>
+          {destinationUsersError && <p className="mt-2 text-xs text-destructive">{destinationUsersError}</p>}
+          {!loadingDestinationUsers && !destinationUsersError && destinationUsers.length === 0 && (
+            <p className="mt-2 text-xs text-warning">No destination users were returned by the API.</p>
+          )}
+        </div>
+      )}
+
       <div className="mt-5 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
         Relationships between objects (e.g. Goals linked to Initiatives, Action Items linked to Meetings) will only be preserved if both linked object types are selected.
       </div>
@@ -802,7 +864,7 @@ export function TenantMigrationWorkspace({
         </button>
         <button
           onClick={handleStartMigration}
-          disabled={selectedObjectCount === 0 || (requiresAssigneeEmail && !hasValidAssigneeEmail)}
+          disabled={selectedObjectCount === 0 || (requiresAssigneeEmail && !hasValidAssigneeEmail) || (selectedObjects.assessments && !hasAssessmentEvaluator)}
           className="inline-flex items-center gap-2 rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {copy.runButtonLabel}

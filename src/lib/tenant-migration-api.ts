@@ -120,6 +120,7 @@ export interface RunMigrationParams {
   sourceClients: MigrationClient[];
   destinationClients: MigrationClient[];
   actionItemAssigneeEmail?: string | null;
+  assessmentEvaluatorUserId?: string | null;
   onClientProgress: (
     clientIndex: number,
     progress: ClientMigrationProgress
@@ -131,6 +132,12 @@ type ApiBody = Record<string, unknown> | unknown[];
 interface DestinationMember {
   id: string;
   email: string;
+}
+
+export interface DestinationUserOption {
+  id: string;
+  email: string | null;
+  name: string;
 }
 
 interface SourceMember {
@@ -224,6 +231,28 @@ function asText(value: unknown): string | null {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeInitiativeFiscalQuarter(value: unknown): {
+  year: number;
+  quarter: number;
+} | null {
+  if (!isRecord(value)) return null;
+  const year = Number(value.year);
+  const quarter = Number(value.quarter);
+  if (!Number.isInteger(year) || !Number.isInteger(quarter) || quarter < 1 || quarter > 4) {
+    return null;
+  }
+
+  const now = new Date();
+  const currentTotal = now.getFullYear() * 4 + Math.floor(now.getMonth() / 3);
+  const floorTotal = currentTotal - 4;
+  const sourceTotal = year * 4 + (quarter - 1);
+  const effectiveTotal = Math.max(sourceTotal, floorTotal);
+  return {
+    year: Math.floor(effectiveTotal / 4),
+    quarter: (effectiveTotal % 4) + 1,
+  };
 }
 
 function cloneProgress(
@@ -626,6 +655,39 @@ function extractAssessmentEvaluatorEmail(record: Record<string, any>) {
   );
 }
 
+function extractUserName(record: Record<string, unknown>) {
+  return (
+    asText(record.name) ||
+    asText(record.full_name) ||
+    asText(record.display_name) ||
+    [asText(record.first_name), asText(record.last_name)].filter(Boolean).join(" ") ||
+    asText((record.contact_info as Record<string, unknown>)?.name) ||
+    "Unnamed user"
+  );
+}
+
+export async function fetchDestinationUsers(
+  apiKey: string
+): Promise<DestinationUserOption[]> {
+  const users = await fetchAllPages<Record<string, unknown>>(apiKey, (cursor) => {
+    const params = new URLSearchParams({ page_size: "200" });
+    if (cursor) params.set("cursor", cursor);
+    return `/lifecycle-manager/v1/users?${params.toString()}`;
+  });
+
+  return users
+    .map((user) => {
+      const id = asText(user.id);
+      const email =
+        asText(user.email) ||
+        asText((user.contact_info as Record<string, unknown>)?.email);
+      if (!id) return null;
+      return { id, email: email?.toLowerCase() || null, name: extractUserName(user) };
+    })
+    .filter((user): user is DestinationUserOption => Boolean(user))
+    .sort((a, b) => `${a.name} ${a.email || ""}`.localeCompare(`${b.name} ${b.email || ""}`));
+}
+
 function isIsoDateTime(value: unknown): value is string {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
@@ -817,6 +879,51 @@ async function resolveListedDeliverableId(
   throw new Error(
     `Created deliverable '${deliverableName}' could not be resolved from the destination client deliverables list.`
   );
+}
+
+async function waitForDeliverableSnapshots(
+  apiKey: string,
+  deliverableId: string,
+  maxAttempts = 12,
+  delayMs = 1000
+): Promise<{ ready: boolean; detail?: string }> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const response = await proxyCallWithRetry<Record<string, any>>(
+      apiKey,
+      `/lifecycle-manager/v1/deliverables/${deliverableId}`
+    );
+    const deliverable =
+      isRecord(response.deliverable) && response.deliverable
+        ? response.deliverable
+        : response;
+    const components = Array.isArray(deliverable.sections)
+      ? deliverable.sections.flatMap((section: any) =>
+          Array.isArray(section?.components) ? section.components : []
+        )
+      : [];
+    const failed = components.find((component: any) =>
+      [component?.snapshot_status, component?.status].some(
+        (status) => typeof status === "string" && /failed|error/i.test(status)
+      )
+    );
+    if (failed) {
+      return {
+        ready: false,
+        detail: "A deliverable component snapshot failed before publishing.",
+      };
+    }
+    const pending = components.some((component: any) =>
+      [component?.snapshot_status, component?.status].some(
+        (status) => typeof status === "string" && /inprogress|pending|processing/i.test(status)
+      )
+    );
+    if (!pending) return { ready: true };
+    if (attempt < maxAttempts - 1) await sleep(delayMs);
+  }
+  return {
+    ready: false,
+    detail: "Timed out waiting for deliverable component snapshots to settle.",
+  };
 }
 
 function collectShortIdCandidates(
@@ -1417,9 +1524,13 @@ function extractDestinationContact(
 async function lookupDestinationContactsByEmail(
   apiKey: string,
   destinationClient: MigrationClient,
-  email: string
+  email: string,
+  cache?: Map<string, DestinationContact[]>
 ): Promise<DestinationContact[]> {
   const normalizedEmail = email.trim().toLowerCase();
+  const cacheKey = `${destinationClient.id}:${normalizedEmail}`;
+  const cached = cache?.get(cacheKey);
+  if (cached) return cached;
   const filtersByPriority: Array<Record<string, string>> = [
     {
       "contact_info.email": buildMemberEmailFilterValue(normalizedEmail),
@@ -1448,6 +1559,7 @@ async function lookupDestinationContactsByEmail(
       );
 
     if (matches.length === 1) {
+      cache?.set(cacheKey, matches);
       return matches;
     }
 
@@ -1456,6 +1568,7 @@ async function lookupDestinationContactsByEmail(
         (contact) => contact.clientId === destinationClient.id
       );
       if (exactClientIdMatches.length === 1) {
+        cache?.set(cacheKey, exactClientIdMatches);
         return exactClientIdMatches;
       }
 
@@ -1465,13 +1578,16 @@ async function lookupDestinationContactsByEmail(
           normalizeName(destinationClient.name)
       );
       if (exactClientNameMatches.length === 1) {
+        cache?.set(cacheKey, exactClientNameMatches);
         return exactClientNameMatches;
       }
 
+      cache?.set(cacheKey, matches);
       return matches;
     }
   }
 
+  cache?.set(cacheKey, []);
   return [];
 }
 
@@ -1560,11 +1676,51 @@ function remapDeliverableComponentConfiguration(
   sourceAssessmentTemplateTitlesById: Map<string, string>,
   destinationAssessmentTemplateIdsByTitle: Map<string, string>
 ): { configuration: unknown; skippedReason?: string } {
-  if (componentKey !== "Assessments" || configuration === undefined) {
+  if (configuration === undefined) {
     return { configuration };
   }
 
   const clonedConfiguration = cloneJsonValue(configuration);
+  if (componentKey.toLowerCase().includes("custom")) {
+    if (!isRecord(clonedConfiguration) || !isRecord(clonedConfiguration.data)) {
+      return {
+        configuration: clonedConfiguration,
+        skippedReason: "Custom component configuration is missing its data object.",
+      };
+    }
+    const data = clonedConfiguration.data;
+    const content = isRecord(data.content) ? data.content : null;
+    if (content) {
+      const contentJson = content.content_json;
+      data.content = {
+        ...content,
+        type: "RichText",
+        ...(typeof contentJson === "string"
+          ? { content_json: contentJson }
+          : { content_json: JSON.stringify(contentJson || { type: "doc", content: [] }) }),
+      };
+    } else if (data.content_json !== undefined) {
+      data.content = {
+        type: "RichText",
+        content_json:
+          typeof data.content_json === "string"
+            ? data.content_json
+            : JSON.stringify(data.content_json),
+      };
+      delete data.content_json;
+    } else {
+      return {
+        configuration: clonedConfiguration,
+        skippedReason: "Custom component configuration has no supported RichText content.",
+      };
+    }
+    return { configuration: clonedConfiguration };
+  }
+
+  if (componentKey !== "Assessments") {
+    return { configuration: clonedConfiguration };
+  }
+
   if (!isRecord(clonedConfiguration) || !isRecord(clonedConfiguration.data)) {
     return { configuration: clonedConfiguration };
   }
@@ -1859,7 +2015,7 @@ async function fetchObjectRecords(
     await sleep(DEFAULT_DELAY_MS);
     const detailResponse = await proxyCallWithRetry<Record<string, any>>(
       apiKey,
-      `${endpointBase}/${item.id}`
+      `${endpointBase}/${item.id}${type === "assessments" ? "?include=children" : ""}`
     );
     const detailRecord =
       (type === "meetings" &&
@@ -1903,7 +2059,9 @@ async function migrateRecord(
   actionItemAssigneeEmail?: string | null,
   sourceMembers: SourceMember[] = [],
   destinationMembers: DestinationMember[] = [],
+  assessmentEvaluatorUserId: string | null = null,
   destinationMeetingTypes: DestinationMeetingType[] = [],
+  destinationContactCache: Map<string, DestinationContact[]> = new Map(),
   deliverableClientIdCache: Map<string, string> = new Map(),
   sourceAssessmentTemplateTitlesById: Map<string, string> = new Map(),
   destinationAssessmentTemplateIdsByTitle: Map<string, string> = new Map(),
@@ -1972,11 +2130,24 @@ async function migrateRecord(
       );
     }
     if (record.fiscal_quarter != null) {
+      const fiscalQuarter = normalizeInitiativeFiscalQuarter(record.fiscal_quarter);
+      if (!fiscalQuarter) {
+        warnings.push(
+          buildWarning(
+            destinationClient.name,
+            OBJECT_LABELS.initiatives,
+            recordName,
+            "Schedule was not copied because the source fiscal quarter had an invalid shape."
+          )
+        );
+      }
+      if (fiscalQuarter) {
       await updateInitiativeComponent(
         "Schedule",
         `/lifecycle-manager/v1/initiatives/${created.id}/schedule`,
-        { fiscal_quarter: record.fiscal_quarter }
+        { fiscal_quarter: fiscalQuarter }
       );
+      }
     }
     const budgetLineItems = Array.isArray(record.budget?.line_items)
       ? record.budget.line_items
@@ -2253,16 +2424,7 @@ async function migrateRecord(
     const templateId = asText(record.assessment_template_id);
     const preferredEvaluatorEmail = extractAssessmentEvaluatorEmail(record);
     const sourceEvaluateUserId = asText(record.evaluate_user_id) || null;
-    const evaluatorUserId =
-      findDestinationMemberIdByEmail(destinationMembers, preferredEvaluatorEmail) ||
-      (await findDestinationMemberIdByEmailViaApi(
-        destinationApiKey,
-        preferredEvaluatorEmail
-      )) ||
-      // Same-tenant clone fallback: the source evaluate_user_id is valid in the
-      // destination tenant because it IS the destination tenant. Cross-tenant
-      // calls will surface an upstream error if the id is unknown there.
-      sourceEvaluateUserId;
+    const evaluatorUserId = assessmentEvaluatorUserId;
 
     if (!templateId) {
       throw new Error(
@@ -2280,7 +2442,7 @@ async function migrateRecord(
       };
       error.resolvedEmail = preferredEvaluatorEmail;
       error.resolvedUserId = null;
-      error.sourceUserId = asText(record.evaluate_user_id);
+      error.sourceUserId = sourceEvaluateUserId;
       throw error;
     }
 
@@ -2729,7 +2891,8 @@ async function migrateRecord(
       const matches = await lookupDestinationContactsByEmail(
         destinationApiKey,
         destinationClient,
-        attendeeEmail
+        attendeeEmail,
+        destinationContactCache
       );
 
       if (matches.length === 1) {
@@ -2825,23 +2988,17 @@ async function migrateRecord(
   const sourceDeliverableStatus = normalizeDeliverableStatus(record.status);
   if (sourceDeliverableStatus) {
     try {
-      await sleep(600);
-      await proxyCallWithRetry(
+      const snapshotResult = await waitForDeliverableSnapshots(
         destinationApiKey,
-        `/lifecycle-manager/v1/deliverables/${createdId}`
+        createdId
       );
-      await sleep(DEFAULT_DELAY_MS);
+      if (!snapshotResult.ready) {
+        throw new Error(snapshotResult.detail || "Deliverable snapshots did not settle.");
+      }
       const listedDeliverableId = await resolveListedDeliverableId(
         destinationApiKey,
         deliverableClientId,
         createdId,
-        getRecordName(record, "Migrated Deliverable")
-      );
-      await sleep(DEFAULT_DELAY_MS);
-      await resolveListedDeliverableId(
-        destinationApiKey,
-        deliverableClientId,
-        listedDeliverableId,
         getRecordName(record, "Migrated Deliverable")
       );
       await sleep(DEFAULT_DELAY_MS);
@@ -2902,7 +3059,7 @@ async function createRelationships(
 ): Promise<RelationshipLogEntry[]> {
   const log: RelationshipLogEntry[] = [];
 
-  for (const item of pendingRelationships) {
+  const processRelationship = async (item: PendingRelationship) => {
     await sleep(DEFAULT_DELAY_MS);
     try {
       let endpoint: string | null = null;
@@ -2938,7 +3095,7 @@ async function createRelationships(
       } else if (item.type === "Goal ↔ Action Item") {
         const goalId = idMaps.goals.get(item.sourceSourceId);
         if (!goalId) {
-          continue;
+          return;
         }
         log.push({
           clientName,
@@ -2949,7 +3106,7 @@ async function createRelationships(
           detail:
             "Goal ↔ Action Item relationship not directly supported by the API - linked via Goal ↔ Initiative instead.",
         });
-        continue;
+        return;
       } else if (item.type === "Agenda / Notes") {
         const meetingId = idMaps.meetings.get(item.sourceSourceId);
         log.push({
@@ -2960,7 +3117,7 @@ async function createRelationships(
           status: meetingId ? "created" : "skipped",
           detail: meetingId ? undefined : "Linked destination record did not migrate",
         });
-        continue;
+        return;
       } else if (item.type === "Meeting ↔ Action Item") {
         const meetingId = idMaps.meetings.get(item.sourceSourceId);
         const actionItemId = idMaps.actionItems.get(item.targetSourceId);
@@ -2979,7 +3136,7 @@ async function createRelationships(
           status: "skipped",
           detail: "Linked destination record did not migrate",
         });
-        continue;
+        return;
       }
 
       await proxyCallWithRetry(destinationApiKey, endpoint, "PUT");
@@ -3000,7 +3157,24 @@ async function createRelationships(
         detail: error instanceof Error ? error.message : "Unknown error",
       });
     }
-  }
+  };
+
+  // Relationship writes are independent once record IDs are known. Keep a
+  // small worker pool so large clients finish faster without bursting the API.
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < pendingRelationships.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await processRelationship(pendingRelationships[index]);
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(4, Math.max(1, pendingRelationships.length)) },
+      () => worker()
+    )
+  );
 
   return log;
 }
@@ -3013,6 +3187,7 @@ export async function runTenantMigration({
   sourceClients,
   destinationClients,
   actionItemAssigneeEmail,
+  assessmentEvaluatorUserId,
   onClientProgress,
 }: RunMigrationParams): Promise<MigrationResult> {
   const clientSummaries: ClientSummary[] = [];
@@ -3022,6 +3197,7 @@ export async function runTenantMigration({
   let totalCreated = 0;
   let totalFailures = 0;
   let destinationMembers: DestinationMember[] = [];
+  let destinationUsers: DestinationUserOption[] = [];
   let sourceMembers: SourceMember[] = [];
   let destinationMeetingTypes: DestinationMeetingType[] = [];
   let sourceAssessmentTemplates: AssessmentTemplateOverview[] = [];
@@ -3029,6 +3205,8 @@ export async function runTenantMigration({
 
   const sourceDeliverableClientIdCache = new Map<string, string>();
   const destinationDeliverableClientIdCache = new Map<string, string>();
+  const destinationContactCache = new Map<string, DestinationContact[]>();
+  const assessmentPreflightRecords = new Map<string, Record<string, any>[]>();
   const sameTenantClone = sourceApiKey.trim() === destinationApiKey.trim();
   const sourceClientLookup = new Map(
     sourceClients.map((client) => [client.id, client])
@@ -3042,6 +3220,16 @@ export async function runTenantMigration({
       destinationMembers = await fetchDestinationMembers(destinationApiKey);
     } catch {
       destinationMembers = [];
+    }
+  }
+
+  if (selectedObjects.assessments) {
+    destinationUsers = await fetchDestinationUsers(destinationApiKey);
+    if (!assessmentEvaluatorUserId) {
+      throw new Error("Select a destination user for assessment creation before starting the migration.");
+    }
+    if (!destinationUsers.some((user) => user.id === assessmentEvaluatorUserId)) {
+      throw new Error("The selected destination assessment user is no longer available. Refresh the user list and select another user.");
     }
   }
 
@@ -3063,7 +3251,7 @@ export async function runTenantMigration({
     }
   }
 
-  if (selectedObjects.deliverables) {
+  if (selectedObjects.deliverables || selectedObjects.assessments) {
     try {
       sourceAssessmentTemplates = await fetchAssessmentTemplates(sourceApiKey);
     } catch {
@@ -3094,6 +3282,35 @@ export async function runTenantMigration({
         ): entry is readonly [string, string] => typeof entry[0] === "string"
       )
   );
+
+  if (selectedObjects.assessments) {
+    const missingTemplates = new Set<string>();
+    for (const mapping of mappings) {
+      const sourceClient = sourceClientLookup.get(mapping.srcClientId);
+      if (!sourceClient) continue;
+      const assessments = await fetchObjectRecords(
+        sourceApiKey,
+        "assessments",
+        sourceClient,
+        sourceDeliverableClientIdCache
+      );
+      assessmentPreflightRecords.set(sourceClient.id, assessments);
+      for (const assessment of assessments) {
+        const templateId = asText(assessment.assessment_template_id);
+        const title = templateId
+          ? sourceAssessmentTemplateTitlesById.get(templateId)
+          : null;
+        if (!title || !destinationAssessmentTemplateIdsByTitle.has(normalizeTemplateTitle(title) || "")) {
+          missingTemplates.add(title || templateId || "Unknown assessment template");
+        }
+      }
+    }
+    if (missingTemplates.size > 0) {
+      throw new Error(
+        `Assessment migration blocked: destination templates are missing: ${[...missingTemplates].join(", ")}. Provision these templates in the destination tenant first.`
+      );
+    }
+  }
 
   for (let clientIndex = 0; clientIndex < mappings.length; clientIndex += 1) {
     const mapping = mappings[clientIndex];
@@ -3126,12 +3343,15 @@ export async function runTenantMigration({
 
       let records: Record<string, any>[] = [];
       try {
-        records = await fetchObjectRecords(
-          sourceApiKey,
-          type,
-          sourceClient,
-          sourceDeliverableClientIdCache
-        );
+        records =
+          type === "assessments" && assessmentPreflightRecords.has(sourceClient.id)
+            ? assessmentPreflightRecords.get(sourceClient.id) || []
+            : await fetchObjectRecords(
+                sourceApiKey,
+                type,
+                sourceClient,
+                sourceDeliverableClientIdCache
+              );
         sourceRecordsByType[type] = records;
         progress.objects[type].total = records.length;
         onClientProgress(clientIndex, cloneProgress(progress));
@@ -3167,7 +3387,9 @@ export async function runTenantMigration({
             actionItemAssigneeEmail,
             sourceMembers,
             destinationMembers,
+            assessmentEvaluatorUserId || null,
             destinationMeetingTypes,
+            destinationContactCache,
             destinationDeliverableClientIdCache,
             sourceAssessmentTemplateTitlesById,
             destinationAssessmentTemplateIdsByTitle,
