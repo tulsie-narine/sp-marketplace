@@ -232,6 +232,40 @@ async function fetchRecordIds(
   return ids;
 }
 
+async function fetchLinkedActionItemIds(
+  apiKey: string,
+  clientId: string
+): Promise<string[]> {
+  const actionItemIds = new Set<string>();
+
+  for (const resource of ["initiatives", "meetings"] as const) {
+    const parentConfig: SectionConfig = {
+      type: resource,
+      label: resource,
+      listEndpoint: (cid) =>
+        `/lifecycle-manager/v1/${resource}?filter[client.id]=${clientFilter(cid)}&page_size=100`,
+      deleteEndpoint: (id) => `/lifecycle-manager/v1/${resource}/${id}`,
+      paginated: true,
+    };
+    const parentIds = await fetchRecordIds(apiKey, parentConfig, clientId);
+
+    for (const parentId of parentIds) {
+      const response = await proxyCall(
+        apiKey,
+        `/lifecycle-manager/v1/${resource}/${parentId}/action-items`
+      );
+      const linkedIds = Array.isArray(response?.action_item_ids)
+        ? response.action_item_ids
+        : [];
+      linkedIds.forEach((id: unknown) => {
+        if (typeof id === "string" && id.trim()) actionItemIds.add(id);
+      });
+    }
+  }
+
+  return [...actionItemIds];
+}
+
 // ---- Delete a single record ----
 
 async function deleteRecord(
@@ -323,6 +357,14 @@ export async function runClientCleanup(
       });
       onProgress({ ...progress, sections: progress.sections.map((s) => ({ ...s })) });
       continue;
+    }
+
+    if (config.type === "actionItems" && ids.length === 0) {
+      try {
+        ids = await fetchLinkedActionItemIds(apiKey, client.id);
+      } catch {
+        // Preserve the primary list result; a relationship fallback is best effort.
+      }
     }
 
     sp.total = ids.length;
