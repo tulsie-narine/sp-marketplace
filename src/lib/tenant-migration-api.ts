@@ -119,8 +119,7 @@ export interface RunMigrationParams {
   selectedObjects: SelectedObjects;
   sourceClients: MigrationClient[];
   destinationClients: MigrationClient[];
-  actionItemAssigneeEmail?: string | null;
-  assessmentEvaluatorUserId?: string | null;
+  primaryDestinationUserId?: string | null;
   onClientProgress: (
     clientIndex: number,
     progress: ClientMigrationProgress
@@ -2092,10 +2091,9 @@ async function migrateRecord(
   destinationApiKey: string,
   destinationClient: MigrationClient,
   record: Record<string, any>,
-  actionItemAssigneeEmail?: string | null,
+  primaryDestinationUserId: string | null = null,
   sourceMembers: SourceMember[] = [],
   destinationMembers: DestinationMember[] = [],
-  assessmentEvaluatorUserId: string | null = null,
   destinationMeetingTypes: DestinationMeetingType[] = [],
   destinationContactCache: Map<string, DestinationContact[]> = new Map(),
   deliverableClientIdCache: Map<string, string> = new Map(),
@@ -2306,12 +2304,12 @@ async function migrateRecord(
         ].map((email) => email.trim().toLowerCase())
       ),
     ];
-    const fallbackAssigneeEmail = actionItemAssigneeEmail?.trim().toLowerCase() || null;
+    const fallbackAssigneeUserId = primaryDestinationUserId?.trim() || null;
 
     if (
       sourceAssigneeIds.length === 0 &&
       sourceAssigneeEmails.length === 0 &&
-      !fallbackAssigneeEmail
+      !fallbackAssigneeUserId
     ) {
       throw new Error("Skipped - no assignee available.");
     }
@@ -2319,8 +2317,8 @@ async function migrateRecord(
     const assignedUserIdsPayload =
       sourceAssigneeEmails.length > 0
         ? sourceAssigneeEmails.map((email) => ({ email }))
-        : fallbackAssigneeEmail
-        ? [{ email: fallbackAssigneeEmail }]
+        : fallbackAssigneeUserId
+        ? [fallbackAssigneeUserId]
         : sourceAssigneeIds.length > 0
         ? sourceAssigneeIds
         : [];
@@ -2384,8 +2382,8 @@ async function migrateRecord(
         objectType: OBJECT_LABELS.actionItems,
         recordName,
         resolvedEmail:
-          sourceAssigneeEmails[0] || fallbackAssigneeEmail || null,
-        resolvedUserId: null,
+          sourceAssigneeEmails[0] || null,
+        resolvedUserId: fallbackAssigneeUserId,
         sourceUserId: sourceAssigneeIds[0] || null,
         note: "Action Item assignee resolution",
       },
@@ -2460,7 +2458,7 @@ async function migrateRecord(
     const templateId = asText(record.assessment_template_id);
     const preferredEvaluatorEmail = extractAssessmentEvaluatorEmail(record);
     const sourceEvaluateUserId = asText(record.evaluate_user_id) || null;
-    const evaluatorUserId = assessmentEvaluatorUserId;
+    const evaluatorUserId = primaryDestinationUserId;
 
     if (!templateId) {
       throw new Error(
@@ -3222,8 +3220,7 @@ export async function runTenantMigration({
   selectedObjects,
   sourceClients,
   destinationClients,
-  actionItemAssigneeEmail,
-  assessmentEvaluatorUserId,
+  primaryDestinationUserId,
   onClientProgress,
 }: RunMigrationParams): Promise<MigrationResult> {
   const clientSummaries: ClientSummary[] = [];
@@ -3259,13 +3256,13 @@ export async function runTenantMigration({
     }
   }
 
-  if (selectedObjects.assessments) {
+  if (selectedObjects.assessments || selectedObjects.actionItems) {
     destinationUsers = await fetchDestinationUsers(destinationApiKey);
-    if (!assessmentEvaluatorUserId) {
-      throw new Error("Select a destination user for assessment creation before starting the migration.");
+    if (!primaryDestinationUserId) {
+      throw new Error("Select a primary destination user before starting the migration.");
     }
-    if (!destinationUsers.some((user) => user.id === assessmentEvaluatorUserId)) {
-      throw new Error("The selected destination assessment user is no longer available. Refresh the user list and select another user.");
+    if (!destinationUsers.some((user) => user.id === primaryDestinationUserId)) {
+      throw new Error("The selected primary destination user is no longer available. Refresh the user list and select another user.");
     }
   }
 
@@ -3420,10 +3417,9 @@ export async function runTenantMigration({
             destinationApiKey,
             destinationClient,
             record,
-            actionItemAssigneeEmail,
+            primaryDestinationUserId,
             sourceMembers,
             destinationMembers,
-            assessmentEvaluatorUserId || null,
             destinationMeetingTypes,
             destinationContactCache,
             destinationDeliverableClientIdCache,

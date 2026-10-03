@@ -232,12 +232,9 @@ export function TenantMigrationWorkspace({
   const [clientMappings, setClientMappings] = useState<ClientMapping[]>([]);
   const [selectedObjects, setSelectedObjects] = useState<SelectedObjects>(DEFAULT_SELECTED_OBJECTS);
   const [destinationUsers, setDestinationUsers] = useState<DestinationUserOption[]>([]);
-  const [selectedAssessmentEvaluatorUserId, setSelectedAssessmentEvaluatorUserId] = useState("");
+  const [selectedPrimaryDestinationUserId, setSelectedPrimaryDestinationUserId] = useState("");
   const [loadingDestinationUsers, setLoadingDestinationUsers] = useState(false);
   const [destinationUsersError, setDestinationUsersError] = useState<string | null>(null);
-  const [actionItemAssigneeEmail, setActionItemAssigneeEmail] = useState(
-    "tulsie.narine+lmx-demo-halo@scalepad.com"
-  );
   const [migrationProgress, setMigrationProgress] = useState<ClientMigrationProgress[]>([]);
   const [migrationResult, setMigrationResult] = useState<MigrationResult | null>(null);
   const [loadingClients, setLoadingClients] = useState(false);
@@ -287,12 +284,11 @@ export function TenantMigrationWorkspace({
     () => Object.values(selectedObjects).filter(Boolean).length,
     [selectedObjects]
   );
-  const requiresAssigneeEmail = selectedObjects.actionItems;
-  const hasValidAssigneeEmail = actionItemAssigneeEmail.trim().length > 0;
-  const hasAssessmentEvaluator = selectedAssessmentEvaluatorUserId.trim().length > 0;
+  const requiresPrimaryDestinationUser = selectedObjects.actionItems || selectedObjects.assessments;
+  const hasPrimaryDestinationUser = selectedPrimaryDestinationUserId.trim().length > 0;
 
   useEffect(() => {
-    if (!selectedObjects.assessments || !destinationApiKey || destinationUsers.length > 0) return;
+    if ((!selectedObjects.assessments && !selectedObjects.actionItems) || !destinationApiKey || destinationUsers.length > 0) return;
     let cancelled = false;
     setLoadingDestinationUsers(true);
     setDestinationUsersError(null);
@@ -300,7 +296,7 @@ export function TenantMigrationWorkspace({
       .then((users) => {
         if (cancelled) return;
         setDestinationUsers(users);
-        setSelectedAssessmentEvaluatorUserId((current) => current || users[0]?.id || "");
+        setSelectedPrimaryDestinationUserId((current) => current || users[0]?.id || "");
       })
       .catch((error) => {
         if (cancelled) return;
@@ -312,7 +308,7 @@ export function TenantMigrationWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [destinationApiKey, destinationUsers.length, selectedObjects.assessments]);
+  }, [destinationApiKey, destinationUsers.length, selectedObjects.actionItems, selectedObjects.assessments]);
 
   const completedClients = useMemo(
     () =>
@@ -440,8 +436,7 @@ export function TenantMigrationWorkspace({
         selectedObjects,
         sourceClients,
         destinationClients,
-        actionItemAssigneeEmail: selectedObjects.actionItems ? actionItemAssigneeEmail.trim() || null : null,
-        assessmentEvaluatorUserId: selectedObjects.assessments ? selectedAssessmentEvaluatorUserId : null,
+        primaryDestinationUserId: requiresPrimaryDestinationUser ? selectedPrimaryDestinationUserId : null,
         onClientProgress: (clientIndex, progress) => {
           setMigrationProgress((prev) => prev.map((item, index) => (index === clientIndex ? progress : item)));
         },
@@ -803,34 +798,18 @@ export function TenantMigrationWorkspace({
         })}
       </div>
 
-      {selectedObjects.actionItems && (
-        <div className="mt-5 rounded-md border border-border bg-surface-raised p-4">
-          <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Fallback Assignee Email for Action Items
-          </label>
-          <input
-            type="email"
-            value={actionItemAssigneeEmail}
-            onChange={(event) => setActionItemAssigneeEmail(event.target.value)}
-            placeholder="name@company.com"
-            required
-            className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        </div>
-      )}
-
-      {selectedObjects.assessments && (
+      {requiresPrimaryDestinationUser && (
         <div className="mt-5 rounded-md border border-primary/30 bg-primary/5 p-4">
           <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Destination user for assessments
+            Primary destination user for assessments and action items
           </label>
           <p className="mb-3 text-xs text-muted-foreground">
-            Choose the user recorded as the primary evaluator on new destination assessments.
+            Choose the destination user recorded as the assessment evaluator and used when an action item’s source assignee cannot be matched.
           </p>
           <select
-            aria-label="Destination user for assessments"
-            value={selectedAssessmentEvaluatorUserId}
-            onChange={(event) => setSelectedAssessmentEvaluatorUserId(event.target.value)}
+            aria-label="Primary destination user for assessments and action items"
+            value={selectedPrimaryDestinationUserId}
+            onChange={(event) => setSelectedPrimaryDestinationUserId(event.target.value)}
             disabled={loadingDestinationUsers || destinationUsers.length === 0}
             className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           >
@@ -864,7 +843,7 @@ export function TenantMigrationWorkspace({
         </button>
         <button
           onClick={handleStartMigration}
-          disabled={selectedObjectCount === 0 || (requiresAssigneeEmail && !hasValidAssigneeEmail) || (selectedObjects.assessments && !hasAssessmentEvaluator)}
+          disabled={selectedObjectCount === 0 || (requiresPrimaryDestinationUser && !hasPrimaryDestinationUser)}
           className="inline-flex items-center gap-2 rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {copy.runButtonLabel}
