@@ -7,6 +7,10 @@ import { supabase } from "@/integrations/supabase/client";
 
 const DELAY_MS = 120;
 
+function clientFilter(clientId: string) {
+  return encodeURIComponent(`eq:${clientId}`);
+}
+
 // ---- Types ----
 
 export interface CleanupClient {
@@ -124,35 +128,13 @@ interface SectionConfig {
 }
 
 const SECTIONS: SectionConfig[] = [
-  {
-    type: "initiatives",
-    label: "Initiatives",
-    listEndpoint: (cid) =>
-      `/lifecycle-manager/v1/initiatives?filter[client.id]=${cid}&page_size=100`,
-    deleteEndpoint: (id) => `/lifecycle-manager/v1/initiatives/${id}`,
-    paginated: true,
-  },
-  {
-    type: "goals",
-    label: "Goals",
-    listEndpoint: (cid) =>
-      `/lifecycle-manager/v1/goals?filter[client.id]=${cid}&page_size=100`,
-    deleteEndpoint: (id) => `/lifecycle-manager/v1/goals/${id}`,
-    paginated: true,
-  },
-  {
-    type: "meetings",
-    label: "Meetings",
-    listEndpoint: (cid) =>
-      `/lifecycle-manager/v1/meetings?filter[client.id]=${cid}&page_size=100`,
-    deleteEndpoint: (id) => `/lifecycle-manager/v1/meetings/${id}`,
-    paginated: true,
-  },
+  // Delete dependent records before their parent records so relationship
+  // constraints do not prevent the cleanup from completing.
   {
     type: "actionItems",
     label: "Action Items",
     listEndpoint: (cid) =>
-      `/lifecycle-manager/v1/action-items?filter[client.id]=${cid}&page_size=100`,
+      `/lifecycle-manager/v1/action-items?filter[client.id]=${clientFilter(cid)}&page_size=100`,
     deleteEndpoint: (id) => `/lifecycle-manager/v1/action-items/${id}`,
     paginated: true,
   },
@@ -160,7 +142,7 @@ const SECTIONS: SectionConfig[] = [
     type: "notes",
     label: "Notes",
     listEndpoint: (cid) =>
-      `/lifecycle-manager/v1/notes?filter[client.id]=${cid}&page_size=100`,
+      `/lifecycle-manager/v1/notes?filter[client.id]=${clientFilter(cid)}&page_size=100`,
     deleteEndpoint: (id) => `/lifecycle-manager/v1/notes/${id}`,
     paginated: true,
   },
@@ -168,25 +150,49 @@ const SECTIONS: SectionConfig[] = [
     type: "assessments",
     label: "Assessments",
     listEndpoint: (cid) =>
-      `/lifecycle-manager/v1/assessments?filter[client.id]=${cid}&page_size=100`,
+      `/lifecycle-manager/v1/assessments?filter[client.id]=${clientFilter(cid)}&page_size=100`,
     deleteEndpoint: (id) => `/lifecycle-manager/v1/assessments/${id}`,
-    paginated: true,
-  },
-  {
-    type: "contracts",
-    label: "Contracts",
-    listEndpoint: (cid) =>
-      `/lifecycle-manager/v1/contracts?filter[client.id]=${cid}&page_size=100`,
-    deleteEndpoint: (id) => `/lifecycle-manager/v1/contracts/${id}`,
     paginated: true,
   },
   {
     type: "deliverables",
     label: "Deliverables",
     listEndpoint: (cid) =>
-      `/lifecycle-manager/v1/clients/${cid}/deliverables`,
+      `/lifecycle-manager/v1/deliverables?filter[client.id]=${clientFilter(cid)}&page_size=100`,
     deleteEndpoint: (id) => `/lifecycle-manager/v1/deliverables/${id}`,
-    paginated: false,
+    paginated: true,
+  },
+  {
+    type: "meetings",
+    label: "Meetings",
+    listEndpoint: (cid) =>
+      `/lifecycle-manager/v1/meetings?filter[client.id]=${clientFilter(cid)}&page_size=100`,
+    deleteEndpoint: (id) => `/lifecycle-manager/v1/meetings/${id}`,
+    paginated: true,
+  },
+  {
+    type: "contracts",
+    label: "Contracts",
+    listEndpoint: (cid) =>
+      `/lifecycle-manager/v1/contracts?filter[client.id]=${clientFilter(cid)}&page_size=100`,
+    deleteEndpoint: (id) => `/lifecycle-manager/v1/contracts/${id}`,
+    paginated: true,
+  },
+  {
+    type: "goals",
+    label: "Goals",
+    listEndpoint: (cid) =>
+      `/lifecycle-manager/v1/goals?filter[client.id]=${clientFilter(cid)}&page_size=100`,
+    deleteEndpoint: (id) => `/lifecycle-manager/v1/goals/${id}`,
+    paginated: true,
+  },
+  {
+    type: "initiatives",
+    label: "Initiatives",
+    listEndpoint: (cid) =>
+      `/lifecycle-manager/v1/initiatives?filter[client.id]=${clientFilter(cid)}&page_size=100`,
+    deleteEndpoint: (id) => `/lifecycle-manager/v1/initiatives/${id}`,
+    paginated: true,
   },
 ];
 
