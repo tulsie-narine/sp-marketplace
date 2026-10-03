@@ -321,6 +321,39 @@ export function TenantMigrationWorkspace({
     [migrationProgress]
   );
 
+  const resourceProgress = useMemo(
+    () =>
+      (Object.keys(OBJECT_LABELS) as MigrationObjectType[])
+        .filter((type) => type !== "relationships" && selectedObjects[type])
+        .map((type) => {
+          const states = migrationProgress.map((client) => client.objects[type]);
+          const total = states.reduce((sum, state) => sum + state.total, 0);
+          const succeeded = states.reduce((sum, state) => sum + state.succeeded, 0);
+          const failed = states.reduce(
+            (sum, state) =>
+              sum + state.errors.filter((entry) => entry.severity !== "warning").length,
+            0
+          );
+          const completed = Math.min(total, succeeded + failed);
+          const hasRunning = states.some((state) => state.status === "running");
+          const hasFailure = states.some((state) => state.status === "failed" || state.status === "partial");
+          const allFinished = states.length > 0 && states.every(
+            (state) => state.status !== "pending" && state.status !== "running"
+          );
+
+          return {
+            type,
+            label: OBJECT_LABELS[type],
+            total,
+            completed,
+            hasRunning,
+            hasFailure,
+            allFinished,
+          };
+        }),
+    [migrationProgress, selectedObjects]
+  );
+
   const errorClientOptions = useMemo(() => {
     if (!migrationResult) return [];
     return Array.from(new Set(migrationResult.errors.map((entry) => entry.clientName))).sort((a, b) => a.localeCompare(b));
@@ -923,6 +956,70 @@ export function TenantMigrationWorkspace({
             className="h-full rounded-full bg-primary transition-all"
             style={{ width: `${migrationProgress.length ? (completedClients / migrationProgress.length) * 100 : 0}%` }}
           />
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-card p-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="font-heading text-base font-bold text-foreground">Resource progress</h3>
+            <p className="text-sm text-muted-foreground">
+              Each bar advances as source records are processed for the mapped clients.
+            </p>
+          </div>
+          <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-medium text-primary">
+            Live
+          </span>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          {resourceProgress.map((resource) => {
+            const percent = resource.total > 0
+              ? Math.min(100, (resource.completed / resource.total) * 100)
+              : 0;
+            const isDiscovering = resource.hasRunning && resource.total === 0;
+            const isComplete = resource.allFinished && resource.total > 0;
+
+            return (
+              <div key={resource.type} className="rounded-md border border-border bg-surface-raised/40 px-3 py-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-xs font-medium text-foreground">{resource.label}</span>
+                  <span className={classNames(
+                    "text-[10px] font-medium",
+                    resource.hasFailure ? "text-warning" : isComplete ? "text-success" : "text-muted-foreground"
+                  )}>
+                    {resource.total > 0
+                      ? `${resource.completed} / ${resource.total}`
+                      : isDiscovering
+                        ? "Discovering…"
+                        : "Waiting"}
+                  </span>
+                </div>
+                <div
+                  className="h-2 overflow-hidden rounded-full bg-border/70"
+                  role="progressbar"
+                  aria-label={`${resource.label} migration progress`}
+                  aria-valuemin={0}
+                  aria-valuemax={resource.total || 1}
+                  aria-valuenow={resource.completed}
+                >
+                  <div
+                    className={classNames(
+                      "h-full rounded-full transition-all duration-300",
+                      resource.hasFailure ? "bg-warning" : isComplete ? "bg-success" : "bg-primary",
+                      isDiscovering && "w-1/3 animate-pulse"
+                    )}
+                    style={isDiscovering ? undefined : { width: `${percent}%` }}
+                  />
+                </div>
+                <p className="mt-2 text-[10px] text-muted-foreground">
+                  {resource.total > 0
+                    ? `${resource.total} source ${resource.total === 1 ? "item" : "items"} discovered`
+                    : "Waiting for source discovery"}
+                </p>
+              </div>
+            );
+          })}
         </div>
       </div>
 
