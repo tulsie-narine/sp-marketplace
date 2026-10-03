@@ -161,6 +161,7 @@ interface DestinationContact {
 interface AssessmentTemplateOverview {
   id: string;
   title: string;
+  questionCount?: number;
 }
 
 interface AssessmentTemplateDetail extends AssessmentTemplateOverview {
@@ -1689,6 +1690,17 @@ function normalizeTemplateTitle(value: string | null | undefined) {
   return normalized || null;
 }
 
+function countAssessmentTemplateQuestions(template: Record<string, any>) {
+  const categories = Array.isArray(template.categories)
+    ? template.categories
+    : [];
+  return categories.reduce(
+    (total: number, category: Record<string, any>) =>
+      total + (Array.isArray(category.questions) ? category.questions.length : 0),
+    0
+  );
+}
+
 export function buildTagCreatePayload(sourceTag: Record<string, any>) {
   return {
     tag: {
@@ -1762,7 +1774,9 @@ async function fetchAssessmentTemplates(
     .map((item) => {
       const id = asText(item.assessment_template_id) || asText(item.id);
       const title = asText(item.title);
-      return id && title ? { id, title } : null;
+      const questionCount =
+        typeof item.question_count === "number" ? item.question_count : undefined;
+      return id && title ? { id, title, questionCount } : null;
     })
     .filter((item): item is AssessmentTemplateOverview => Boolean(item));
 }
@@ -1780,7 +1794,7 @@ async function fetchAssessmentTemplateDetail(
     : response;
   const id = asText(template.assessment_template_id) || templateId;
   const title = asText(template.title) || "Untitled assessment template";
-  return { id, title, template };
+  return { id, title, questionCount: countAssessmentTemplateQuestions(template), template };
 }
 
 /**
@@ -1869,22 +1883,35 @@ async function provisionMissingAssessmentTemplates(
   sourceTemplates: AssessmentTemplateOverview[],
   destinationTemplates: AssessmentTemplateOverview[]
 ): Promise<AssessmentTemplateOverview[]> {
-  const destinationByTitle = new Map(
-    destinationTemplates.map((template) => [
-      normalizeTemplateTitle(template.title),
-      template,
-    ])
-  );
   const result = [...destinationTemplates];
 
   for (const sourceTemplate of sourceTemplates) {
     const key = normalizeTemplateTitle(sourceTemplate.title);
-    if (!key || destinationByTitle.has(key)) continue;
+    if (!key) continue;
 
     const detail = await fetchAssessmentTemplateDetail(
       sourceApiKey,
       sourceTemplate.id
     );
+    const sourceQuestionCount = detail.questionCount || 0;
+    const sameNameTemplates = result.filter(
+      (template) => normalizeTemplateTitle(template.title) === key
+    );
+    let matchingDestinationTemplate: AssessmentTemplateOverview | null = null;
+    for (const candidate of sameNameTemplates) {
+      const candidateDetail = candidate.questionCount === undefined
+        ? await fetchAssessmentTemplateDetail(destinationApiKey, candidate.id)
+        : null;
+      const candidateQuestionCount =
+        candidate.questionCount ?? candidateDetail?.questionCount ?? 0;
+      candidate.questionCount = candidateQuestionCount;
+      if (candidateQuestionCount === sourceQuestionCount) {
+        matchingDestinationTemplate = candidate;
+        break;
+      }
+    }
+    if (matchingDestinationTemplate) continue;
+
     const created = await proxyCall<Record<string, any>>(
       destinationApiKey,
       "/lifecycle-manager/v1/assessment-templates",
@@ -1904,8 +1931,11 @@ async function provisionMissingAssessmentTemplates(
       );
     }
 
-    const provisioned = { id: createdId, title: sourceTemplate.title };
-    destinationByTitle.set(key, provisioned);
+    const provisioned = {
+      id: createdId,
+      title: sourceTemplate.title,
+      questionCount: sourceQuestionCount,
+    };
     result.push(provisioned);
   }
 
