@@ -15,6 +15,7 @@ function clientFilter(clientId: string) {
 
 export interface CleanupClient {
   id: string;
+  coreId?: string;
   name: string;
   lifecycle: string;
   num_hardware_assets: number;
@@ -114,7 +115,40 @@ export async function fetchAllClients(apiKey: string): Promise<CleanupClient[]> 
     await sleep(DELAY_MS);
   } while (cursor);
 
-  return all;
+  // Core client IDs are not guaranteed to be valid Lifecycle Manager client
+  // IDs. Resolve by name against the LMX client collection before using IDs in
+  // Lifecycle Manager filters and delete routes.
+  try {
+    const lifecycleClients: Array<Record<string, any>> = [];
+    let lifecycleCursor: string | null = null;
+    do {
+      const params = new URLSearchParams({ page_size: "200", sort: "name" });
+      if (lifecycleCursor) params.set("cursor", lifecycleCursor);
+      const json = await proxyCall(apiKey, `/lifecycle-manager/v1/clients?${params.toString()}`);
+      lifecycleClients.push(...(json.data || []));
+      lifecycleCursor = json.next_cursor || null;
+    } while (lifecycleCursor);
+
+    const lifecycleByName = new Map(
+      lifecycleClients
+        .map((client) => {
+          const name = String(client.name || client.client?.name || "").trim().toLowerCase();
+          const id = client.id || client.client?.id;
+          return name && id ? [name, String(id)] as const : null;
+        })
+        .filter((entry): entry is readonly [string, string] => Boolean(entry))
+    );
+
+    return all.map((client) => ({
+      ...client,
+      coreId: client.id,
+      id: lifecycleByName.get(client.name.trim().toLowerCase()) || client.id,
+    }));
+  } catch {
+    // Preserve the Core list if the account cannot enumerate LMX clients;
+    // downstream calls will surface the exact permission or ID error.
+    return all;
+  }
 }
 
 // ---- Section config ----

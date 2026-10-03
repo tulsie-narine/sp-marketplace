@@ -2,6 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 
 export interface MigrationClient {
   id: string;
+  coreId?: string;
   name: string;
   lifecycle: string;
   num_hardware_assets: number;
@@ -510,12 +511,45 @@ export async function fetchAllClients(
     return `/core/v1/clients?${params.toString()}`;
   });
 
-  return clients.filter(
+  const coreClients = clients.filter(
     (client): client is MigrationClient =>
       isRecord(client) &&
       typeof client.id === "string" &&
       typeof client.name === "string"
   );
+
+  try {
+    const lifecycleClients = await fetchAllPages<Record<string, any>>(
+      apiKey,
+      (cursor) => {
+        const params = new URLSearchParams({
+          page_size: "200",
+          sort: "name",
+        });
+        if (cursor) params.set("cursor", cursor);
+        return `/lifecycle-manager/v1/clients?${params.toString()}`;
+      }
+    );
+    const lifecycleByName = new Map(
+      lifecycleClients
+        .map((client) => {
+          const name = asText(client.name) || (isRecord(client.client) ? asText(client.client.name) : null);
+          const id = asText(client.id) || (isRecord(client.client) ? asText(client.client.id) : null);
+          return name && id ? [name.trim().toLowerCase(), id] as const : null;
+        })
+        .filter((entry): entry is readonly [string, string] => Boolean(entry))
+    );
+
+    return coreClients.map((client) => ({
+      ...client,
+      coreId: client.id,
+      id: lifecycleByName.get(client.name.trim().toLowerCase()) || client.id,
+    }));
+  } catch {
+    // Keep the Core list as a safe fallback for accounts without permission to
+    // enumerate Lifecycle Manager clients; the subsequent API error is logged.
+    return coreClients;
+  }
 }
 
 function getRecordName(record: Record<string, any>, fallback: string) {
