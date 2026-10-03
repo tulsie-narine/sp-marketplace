@@ -181,43 +181,6 @@ function StatusBadge({ value }: { value: string }) {
   );
 }
 
-function ProgressPill({
-  status,
-  succeeded,
-  total,
-}: {
-  status: ClientMigrationProgress["objects"][MigrationObjectType]["status"];
-  succeeded: number;
-  total: number;
-}) {
-  if (status === "running") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-medium text-warning">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        running
-      </span>
-    );
-  }
-
-  if (status === "skipped") {
-    return <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">skipped</span>;
-  }
-
-  if (status === "pending") {
-    return <span className="rounded-full bg-surface-raised px-2 py-0.5 text-[10px] font-medium text-muted-foreground">pending</span>;
-  }
-
-  if (status === "success") {
-    return <span className="rounded-full bg-success/15 px-2 py-0.5 text-[10px] font-medium text-success">✓ {succeeded}{total > 0 ? ` / ${total}` : ""}</span>;
-  }
-
-  if (status === "partial") {
-    return <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-medium text-warning">⚠ {succeeded}/{total}</span>;
-  }
-
-  return <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] font-medium text-destructive">✗ {succeeded}/{total}</span>;
-}
-
 export function TenantMigrationWorkspace({
   copy = DEFAULT_COPY,
 }: {
@@ -959,12 +922,12 @@ export function TenantMigrationWorkspace({
         </div>
       </div>
 
-      <div className="rounded-lg border border-border bg-card p-5">
-        <div className="mb-4 flex items-start justify-between gap-3">
+      <div className="rounded-lg border border-border bg-card p-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <h3 className="font-heading text-base font-bold text-foreground">Resource progress</h3>
+            <h3 className="font-heading text-base font-bold text-foreground">Migration activity</h3>
             <p className="text-sm text-muted-foreground">
-              Each bar advances as source records are processed for the mapped clients.
+              Follow each client and resource as it moves through the migration.
             </p>
           </div>
           <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-medium text-primary">
@@ -972,89 +935,75 @@ export function TenantMigrationWorkspace({
           </span>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          {resourceProgress.map((resource) => {
-            const percent = resource.total > 0
-              ? Math.min(100, (resource.completed / resource.total) * 100)
-              : 0;
-            const isDiscovering = resource.hasRunning && resource.total === 0;
-            const isComplete = resource.allFinished && resource.total > 0;
-
-            return (
-              <div key={resource.type} className="rounded-md border border-border bg-surface-raised/40 px-3 py-3">
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-xs font-medium text-foreground">{resource.label}</span>
-                  <span className={classNames(
-                    "text-[10px] font-medium",
-                    resource.hasFailure ? "text-warning" : isComplete ? "text-success" : "text-muted-foreground"
-                  )}>
-                    {resource.total > 0
-                      ? `${resource.completed} / ${resource.total}`
-                      : isDiscovering
-                        ? "Discovering…"
-                        : "Waiting"}
-                  </span>
-                </div>
-                <div
-                  className="h-2 overflow-hidden rounded-full bg-border/70"
-                  role="progressbar"
-                  aria-label={`${resource.label} migration progress`}
-                  aria-valuemin={0}
-                  aria-valuemax={resource.total || 1}
-                  aria-valuenow={resource.completed}
-                >
-                  <div
-                    className={classNames(
-                      "h-full rounded-full transition-all duration-300",
-                      resource.hasFailure ? "bg-warning" : isComplete ? "bg-success" : "bg-primary",
-                      isDiscovering && "w-1/3 animate-pulse"
-                    )}
-                    style={isDiscovering ? undefined : { width: `${percent}%` }}
-                  />
-                </div>
-                <p className="mt-2 text-[10px] text-muted-foreground">
-                  {resource.total > 0
-                    ? `${resource.total} source ${resource.total === 1 ? "item" : "items"} discovered`
-                    : "Waiting for source discovery"}
-                </p>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="space-y-3">
+        <div className="space-y-2">
         {migrationProgress.map((client) => {
           const activeClient = Object.values(client.objects).some((objectProgress) => objectProgress.status === "running");
+          const clientResources = resourceProgress.map((resource) => {
+            const objectProgress = client.objects[resource.type];
+            const percent = objectProgress.total > 0
+              ? Math.min(100, ((objectProgress.succeeded + objectProgress.errors.filter((entry) => entry.severity !== "warning").length) / objectProgress.total) * 100)
+              : 0;
+            const isDiscovering = objectProgress.status === "running" && objectProgress.total === 0;
+            const isComplete = objectProgress.status === "success" && objectProgress.total > 0;
+            return { resource, objectProgress, percent, isDiscovering, isComplete };
+          });
+          const knownTotal = clientResources.reduce((sum, item) => sum + item.objectProgress.total, 0);
+          const completedTotal = clientResources.reduce(
+            (sum, item) => sum + item.objectProgress.succeeded + item.objectProgress.errors.filter((entry) => entry.severity !== "warning").length,
+            0
+          );
+          const overallPercent = knownTotal > 0 ? Math.min(100, (completedTotal / knownTotal) * 100) : 0;
+          const currentResource = clientResources.find((item) => item.objectProgress.status === "running");
+          const currentLabel = currentResource
+            ? `${currentResource.resource.label} ${currentResource.objectProgress.total > 0 ? `${currentResource.objectProgress.succeeded}/${currentResource.objectProgress.total}` : "discovering"}`
+            : activeClient ? "Preparing" : "Complete";
           return (
-            <div key={client.clientId} className="rounded-lg border border-border bg-card p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
+            <div key={client.clientId} className="rounded-md border border-border bg-surface-raised/30 px-3 py-3">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                <div className="flex min-w-[220px] items-center gap-2">
                   {activeClient && <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-warning" />}
-                  <h4 className="text-sm font-medium text-foreground">
+                  <h4 className="truncate text-sm font-medium text-foreground">
                     {client.clientName} → {client.destinationClientName}
                   </h4>
                 </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Overall</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {knownTotal > 0 ? `${completedTotal} / ${knownTotal} items` : "Discovering source items…"}
+                    </span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-border/70" role="progressbar" aria-label={`${client.clientName} migration progress`} aria-valuemin={0} aria-valuemax={knownTotal || 1} aria-valuenow={completedTotal}>
+                    <div className={classNames("h-full rounded-full transition-all duration-300", activeClient ? "bg-primary" : "bg-success", knownTotal === 0 && activeClient && "w-1/3 animate-pulse")} style={knownTotal === 0 && activeClient ? undefined : { width: `${overallPercent}%` }} />
+                  </div>
+                </div>
+
+                <div className="flex min-w-[130px] items-center justify-between gap-2 lg:block">
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Current</span>
+                  <span className={classNames("block truncate text-xs font-medium", activeClient ? "text-primary" : "text-success")} title={currentLabel}>{currentLabel}</span>
+                </div>
               </div>
 
-              <div className="space-y-2">
-                {(Object.keys(client.objects) as MigrationObjectType[]).map((type) => {
-                  const objectProgress = client.objects[type];
-                  return (
-                    <div key={type} className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
-                      <span className="text-xs text-foreground">{OBJECT_LABELS[type]}</span>
-                      <ProgressPill
-                        status={objectProgress.status}
-                        succeeded={objectProgress.succeeded}
-                        total={objectProgress.total}
-                      />
+              <div className="mt-3 grid grid-cols-2 gap-1.5 md:grid-cols-4 xl:grid-cols-8">
+                {clientResources.map(({ resource, objectProgress, percent, isDiscovering, isComplete }) => (
+                  <div key={resource.type} className="min-w-0 rounded border border-border/80 bg-card/60 px-2 py-1.5" title={`${resource.label}: ${objectProgress.succeeded} of ${objectProgress.total} completed`}>
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="truncate text-[10px] text-muted-foreground">{resource.label}</span>
+                      <span className={classNames("shrink-0 text-[10px] font-medium", objectProgress.status === "failed" || objectProgress.status === "partial" ? "text-warning" : isComplete ? "text-success" : "text-muted-foreground")}>
+                        {objectProgress.total > 0 ? `${objectProgress.succeeded}/${objectProgress.total}` : isDiscovering ? "…" : objectProgress.status === "skipped" ? "—" : "·"}
+                      </span>
                     </div>
-                  );
-                })}
+                    <div className="mt-1 h-1 overflow-hidden rounded-full bg-border/70">
+                      <div className={classNames("h-full rounded-full transition-all duration-300", objectProgress.status === "failed" || objectProgress.status === "partial" ? "bg-warning" : isComplete ? "bg-success" : "bg-primary", isDiscovering && "w-1/3 animate-pulse")} style={isDiscovering ? undefined : { width: `${percent}%` }} />
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           );
         })}
+      </div>
       </div>
     </div>
   );
