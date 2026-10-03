@@ -237,6 +237,7 @@ export function TenantMigrationWorkspace({
   const [destinationUsersError, setDestinationUsersError] = useState<string | null>(null);
   const [migrationProgress, setMigrationProgress] = useState<ClientMigrationProgress[]>([]);
   const [migrationResult, setMigrationResult] = useState<MigrationResult | null>(null);
+  const [migrationFatalError, setMigrationFatalError] = useState<string | null>(null);
   const [loadingClients, setLoadingClients] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
   const [migrationRunning, setMigrationRunning] = useState(false);
@@ -424,6 +425,7 @@ export function TenantMigrationWorkspace({
     const initialProgress = selectedMappings.map((mapping) => buildInitialClientProgress(mapping));
     setMigrationProgress(initialProgress);
     setMigrationResult(null);
+    setMigrationFatalError(null);
     setFinalTab("summary");
     setMigrationRunning(true);
     setCurrentScreen(4);
@@ -447,9 +449,11 @@ export function TenantMigrationWorkspace({
         description: `${result.clientSummaries.length} clients ${copy.finalSummaryVerb}, ${result.totalCreated} objects created, ${result.totalFailures} failures.`,
       });
     } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown migration error";
+      setMigrationFatalError(detail);
       toast({
         title: copy.stoppedToastTitle,
-        description: error instanceof Error ? error.message : "Unknown error",
+        description: detail,
         variant: "destructive",
       });
     } finally {
@@ -1176,6 +1180,11 @@ export function TenantMigrationWorkspace({
                 <AlertTriangle className="h-4 w-4" />
                 Migration did not produce a final report.
               </div>
+              {migrationFatalError && (
+                <div className="mb-3 rounded-md border border-destructive/20 bg-background/40 p-3 font-mono text-xs leading-5 whitespace-pre-wrap">
+                  {migrationFatalError}
+                </div>
+              )}
               <button
                 onClick={() => setCurrentScreen(3)}
                 className="inline-flex items-center gap-2 rounded-md border border-destructive/30 px-3 py-2 text-xs text-destructive transition-colors hover:bg-destructive/10"
