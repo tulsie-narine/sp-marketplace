@@ -1104,11 +1104,13 @@ async function fetchActionItemsViaRelationships(
       apiKey,
       (cursor) => {
         const params = new URLSearchParams({
-          client_id: client.id,
+          "filter[client.id]": `eq:${client.id}`,
+          include_internal: "true",
+          include_unscheduled: "true",
           page_size: "100",
         });
         if (cursor) params.set("cursor", cursor);
-        return `/lifecycle-manager/v1/initiatives?${params.toString()}`;
+        return `/lifecycle-manager/v2/initiatives?${params.toString()}`;
       }
     );
   } catch (error) {
@@ -2309,22 +2311,36 @@ async function fetchObjectRecords(
     return detailed;
   }
 
-  const endpointBase =
+  const detailEndpointBase =
     type === "actionItems"
       ? "/lifecycle-manager/v1/action-items"
       : `/lifecycle-manager/v1/${type}`;
+  // The v1 initiative collection does not honor the client_id query used by
+  // the legacy endpoints and can return the entire tenant (for example, all
+  // 802 initiatives). The documented v2 collection supports client.id
+  // filtering and returns the same fields needed by the migration mapper.
+  const listEndpointBase =
+    type === "initiatives"
+      ? "/lifecycle-manager/v2/initiatives"
+      : detailEndpointBase;
 
   let list: Record<string, any>[] = [];
   try {
     list = await fetchAllPages<Record<string, any>>(
       apiKey,
       (cursor) => {
-        const params = new URLSearchParams({
-          client_id: client.id,
-          page_size: "100",
-        });
+        const params = new URLSearchParams(
+          type === "initiatives"
+            ? {
+                "filter[client.id]": `eq:${client.id}`,
+                include_internal: "true",
+                include_unscheduled: "true",
+                page_size: "100",
+              }
+            : { client_id: client.id, page_size: "100" }
+        );
         if (cursor) params.set("cursor", cursor);
-        return `${endpointBase}?${params.toString()}`;
+        return `${listEndpointBase}?${params.toString()}`;
       }
     );
   } catch (error) {
@@ -2357,7 +2373,7 @@ async function fetchObjectRecords(
     await sleep(DEFAULT_DELAY_MS);
     const detailResponse = await proxyCallWithRetry<Record<string, any>>(
       apiKey,
-      `${endpointBase}/${item.id}`
+      `${detailEndpointBase}/${item.id}`
     );
     const detailRecord =
       (type === "meetings" &&
