@@ -293,7 +293,7 @@ async function fetchRecordIds(
     const json = await proxyCall(apiKey, config.listEndpoint(clientId));
     for (const item of json.data || []) {
       const recordId = getRecordId(item);
-      if (recordId) ids.push(recordId);
+      if (recordId && matchesClient(item)) ids.push(recordId);
     }
     return ids;
   }
@@ -306,7 +306,9 @@ async function fetchRecordIds(
       const json = await proxyCall(apiKey, url);
       for (const item of json.data || []) {
         const recordId = getRecordId(item);
-        if (recordId) ids.push(recordId);
+        // Keep this client-side guard even when the API accepted the filter.
+        // A malformed or ignored filter must never broaden deletion scope.
+        if (recordId && matchesClient(item)) ids.push(recordId);
       }
       cursor = json.next_cursor || null;
       if (cursor) await sleep(DELAY_MS);
