@@ -8,7 +8,9 @@ import { supabase } from "@/integrations/supabase/client";
 const DELAY_MS = 120;
 
 function clientFilter(clientId: string) {
-  return encodeURIComponent(`eq:${clientId}`);
+  // LMX v1 accepts the exact client identifier here. The documented eq:
+  // prefix currently returns "ClientId does not exist" for these collections.
+  return encodeURIComponent(clientId);
 }
 
 // ---- Types ----
@@ -244,6 +246,16 @@ async function fetchRecordIds(
 ): Promise<string[]> {
   const ids: string[] = [];
 
+  const getRecordId = (item: any): string | null => {
+    const id =
+      item?.id ||
+      item?.note_id ||
+      item?.action_item_id ||
+      item?.engagement_action_id ||
+      item?.uuid;
+    return id ? String(id) : null;
+  };
+
   const matchesClient = (item: any) => {
     const candidates = [
       item?.client?.id,
@@ -268,7 +280,8 @@ async function fetchRecordIds(
         `${baseEndpoint}?${params.toString()}`
       );
       for (const item of fallbackJson.data || []) {
-        if (item.id && matchesClient(item)) fallbackIds.push(item.id);
+        const recordId = getRecordId(item);
+        if (recordId && matchesClient(item)) fallbackIds.push(recordId);
       }
       fallbackCursor = fallbackJson.next_cursor || null;
       if (fallbackCursor) await sleep(DELAY_MS);
@@ -279,7 +292,8 @@ async function fetchRecordIds(
   if (!config.paginated) {
     const json = await proxyCall(apiKey, config.listEndpoint(clientId));
     for (const item of json.data || []) {
-      if (item.id) ids.push(item.id);
+      const recordId = getRecordId(item);
+      if (recordId) ids.push(recordId);
     }
     return ids;
   }
@@ -291,7 +305,8 @@ async function fetchRecordIds(
       if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
       const json = await proxyCall(apiKey, url);
       for (const item of json.data || []) {
-        if (item.id) ids.push(item.id);
+        const recordId = getRecordId(item);
+        if (recordId) ids.push(recordId);
       }
       cursor = json.next_cursor || null;
       if (cursor) await sleep(DELAY_MS);
