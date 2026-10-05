@@ -1085,7 +1085,7 @@ async function fetchActionItemsViaRelationships(
       apiKey,
       (cursor) => {
         const params = new URLSearchParams({
-          "filter[client.id]": `eq:${client.id}`,
+          client_id: client.id,
           page_size: "100",
         });
         if (cursor) params.set("cursor", cursor);
@@ -1128,7 +1128,7 @@ async function fetchActionItemsViaRelationships(
       apiKey,
       (cursor) => {
         const params = new URLSearchParams({
-          "filter[client.id]": `eq:${client.id}`,
+          client_id: client.id,
           page_size: "100",
         });
         if (cursor) params.set("cursor", cursor);
@@ -2301,7 +2301,7 @@ async function fetchObjectRecords(
       apiKey,
       (cursor) => {
         const params = new URLSearchParams({
-          "filter[client.id]": `eq:${client.id}`,
+          client_id: client.id,
           page_size: "100",
         });
         if (cursor) params.set("cursor", cursor);
