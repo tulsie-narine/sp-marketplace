@@ -1149,7 +1149,7 @@ async function fetchActionItemsViaRelationships(
       apiKey,
       (cursor) => {
         const params = new URLSearchParams({
-          "filter[client.id]": `eq:${client.id}`,
+          "filter[client.id]": client.id,
           page_size: "100",
         });
         if (cursor) params.set("cursor", cursor);
@@ -2337,7 +2337,7 @@ async function fetchObjectRecords(
                 include_unscheduled: "true",
                 page_size: "100",
               }
-            : { "filter[client.id]": `eq:${client.id}`, page_size: "100" }
+            : { "filter[client.id]": client.id, page_size: "100" }
         );
         if (cursor) params.set("cursor", cursor);
         return `${listEndpointBase}?${params.toString()}`;
