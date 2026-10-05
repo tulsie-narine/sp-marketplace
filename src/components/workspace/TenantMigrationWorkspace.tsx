@@ -206,6 +206,7 @@ export function TenantMigrationWorkspace({
   const [loadingClients, setLoadingClients] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
   const [migrationRunning, setMigrationRunning] = useState(false);
+  const [migrationStatus, setMigrationStatus] = useState("");
   const [screenOneError, setScreenOneError] = useState<string | null>(null);
   const [finalTab, setFinalTab] = useState<FinalTab>("summary");
 
@@ -424,6 +425,7 @@ export function TenantMigrationWorkspace({
     setMigrationProgress(initialProgress);
     setMigrationResult(null);
     setMigrationFatalError(null);
+    setMigrationStatus("Preparing migration…");
     setFinalTab("summary");
     setMigrationRunning(true);
     setCurrentScreen(4);
@@ -440,8 +442,10 @@ export function TenantMigrationWorkspace({
         onClientProgress: (clientIndex, progress) => {
           setMigrationProgress((prev) => prev.map((item, index) => (index === clientIndex ? progress : item)));
         },
+        onStatus: setMigrationStatus,
       });
       setMigrationResult(result);
+      setMigrationStatus("");
       toast({
         title: copy.completeToastTitle,
         description: `${result.clientSummaries.length} clients ${copy.finalSummaryVerb}, ${result.totalCreated} objects created, ${result.totalFailures} failures.`,
@@ -449,6 +453,7 @@ export function TenantMigrationWorkspace({
     } catch (error) {
       const detail = error instanceof Error ? error.message : "Unknown migration error";
       setMigrationFatalError(detail);
+      setMigrationStatus("");
       toast({
         title: copy.stoppedToastTitle,
         description: detail,
@@ -918,6 +923,7 @@ export function TenantMigrationWorkspace({
           <div>
             <h3 className="font-heading text-lg font-bold text-foreground">{copy.runningTitle}</h3>
             <p className="text-sm text-muted-foreground">Client {Math.min(completedClients + 1, Math.max(migrationProgress.length, 1))} of {migrationProgress.length}</p>
+            {migrationStatus && <p className="mt-1 text-xs text-primary">{migrationStatus}</p>}
           </div>
           <div className="rounded-full bg-warning/15 px-3 py-1 text-xs font-medium text-warning">
             Running
@@ -968,7 +974,11 @@ export function TenantMigrationWorkspace({
             ? "Building relationships"
             : currentResource
             ? `${currentResource.resource.label} ${currentResource.objectProgress.total > 0 ? `${currentResource.objectProgress.succeeded}/${currentResource.objectProgress.total}` : "discovering"}`
-            : activeClient ? "Preparing" : "Complete";
+            : activeClient
+            ? "Preparing"
+            : Object.values(client.objects).some((objectProgress) => objectProgress.status === "pending")
+            ? "Waiting to start"
+            : "Complete";
           return (
             <div key={client.clientId} className="rounded-md border border-border bg-surface-raised/30 px-3 py-3">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center">

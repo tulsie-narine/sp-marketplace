@@ -126,6 +126,7 @@ export interface RunMigrationParams {
     clientIndex: number,
     progress: ClientMigrationProgress
   ) => void;
+  onStatus?: (message: string) => void;
 }
 
 type ApiBody = Record<string, unknown> | unknown[];
@@ -189,6 +190,7 @@ export interface MigrationDebugEntry {
 }
 
 const DEFAULT_DELAY_MS = 120;
+const API_REQUEST_TIMEOUT_MS = 90_000;
 const OBJECT_ORDER: Exclude<MigrationObjectType, "relationships">[] = [
   "initiatives",
   "goals",
@@ -428,10 +430,27 @@ async function proxyCall<T = any>(
   method = "GET",
   body?: ApiBody
 ): Promise<T> {
-  const { data, error } = await supabase.functions.invoke("scalepad-proxy", {
+  const request = supabase.functions.invoke("scalepad-proxy", {
     body: { endpoint, method, body },
     headers: { "x-scalepad-api-key": apiKey },
   });
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(
+      () => reject(new Error(`Request timed out after ${API_REQUEST_TIMEOUT_MS / 1000}s: ${method} ${endpoint}`)),
+      API_REQUEST_TIMEOUT_MS
+    );
+  });
+
+  let response: Awaited<typeof request>;
+  try {
+    response = await Promise.race([request, timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+
+  const { data, error } = response;
 
   if (error) {
     throw buildApiError(
@@ -3511,6 +3530,7 @@ export async function runTenantMigration({
   destinationClients,
   primaryDestinationUserId,
   onClientProgress,
+  onStatus,
 }: RunMigrationParams): Promise<MigrationResult> {
   const clientSummaries: ClientSummary[] = [];
   const allErrors: MigrationErrorEntry[] = [];
@@ -3530,6 +3550,7 @@ export async function runTenantMigration({
   const destinationContactCache = new Map<string, DestinationContact[]>();
   const assessmentPreflightRecords = new Map<string, Record<string, any>[]>();
   const sameTenantClone = sourceApiKey.trim() === destinationApiKey.trim();
+  const reportStatus = (message: string) => onStatus?.(message);
   const sourceClientLookup = new Map(
     sourceClients.map((client) => [client.id, client])
   );
@@ -3538,6 +3559,7 @@ export async function runTenantMigration({
   );
 
   if (selectedObjects.tags) {
+    reportStatus("Preparing tag catalog");
     try {
       const tagResult = await migrateTags(sourceApiKey, destinationApiKey);
       totalCreated += tagResult.created;
@@ -3558,6 +3580,7 @@ export async function runTenantMigration({
   }
 
   if (selectedObjects.assessments || selectedObjects.meetings) {
+    reportStatus("Loading destination members");
     try {
       destinationMembers = await fetchDestinationMembers(destinationApiKey);
     } catch {
@@ -3566,6 +3589,7 @@ export async function runTenantMigration({
   }
 
   if (selectedObjects.assessments || selectedObjects.actionItems) {
+    reportStatus("Loading destination users");
     destinationUsers = await fetchDestinationUsers(destinationApiKey);
     if (!primaryDestinationUserId) {
       throw new Error("Select a primary destination user before starting the migration.");
@@ -3576,6 +3600,7 @@ export async function runTenantMigration({
   }
 
   if (selectedObjects.actionItems || selectedObjects.meetings) {
+    reportStatus("Loading source members");
     try {
       sourceMembers = await fetchDestinationMembers(sourceApiKey);
     } catch {
@@ -3584,6 +3609,7 @@ export async function runTenantMigration({
   }
 
   if (selectedObjects.meetings) {
+    reportStatus("Loading meeting types");
     try {
       destinationMeetingTypes = await fetchDestinationMeetingTypes(
         destinationApiKey
@@ -3594,6 +3620,7 @@ export async function runTenantMigration({
   }
 
   if (selectedObjects.deliverables || selectedObjects.assessments) {
+    reportStatus("Loading assessment templates");
     try {
       sourceAssessmentTemplates = await fetchAssessmentTemplates(sourceApiKey);
     } catch {
@@ -3610,6 +3637,7 @@ export async function runTenantMigration({
   }
 
   if (selectedObjects.assessments || selectedObjects.deliverables) {
+    reportStatus("Provisioning missing assessment templates");
     destinationAssessmentTemplates = await provisionMissingAssessmentTemplates(
       sourceApiKey,
       destinationApiKey,
@@ -3635,6 +3663,7 @@ export async function runTenantMigration({
   );
 
   if (selectedObjects.assessments) {
+    reportStatus("Discovering source assessments");
     for (const mapping of mappings) {
       const sourceClient = sourceClientLookup.get(mapping.srcClientId);
       if (!sourceClient) continue;
@@ -3655,6 +3684,7 @@ export async function runTenantMigration({
     }
 
     const progress = buildInitialClientProgress(mapping);
+    reportStatus(`Migrating ${mapping.srcClientName} → ${mapping.dstClientName}`);
     onClientProgress(clientIndex, cloneProgress(progress));
 
     const idMaps = getIdMaps();
