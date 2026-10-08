@@ -29,7 +29,7 @@ export default function Marketplace() {
     <div className="min-h-screen flex">
       <Sidebar selectedCategory={category} onCategoryChange={setCategory} apps={apps} />
 
-      <div className="ml-60 flex-1 flex flex-col min-h-screen">
+      <div className="ml-72 flex-1 flex flex-col min-h-screen">
         
         <Topbar
           title="Marketplace"
@@ -39,7 +39,7 @@ export default function Marketplace() {
           onAddApp={() => setShowAdd(true)}
         />
 
-        <main className="flex-1 p-6 space-y-5 overflow-y-auto">
+        <main className="flex-1 p-8 space-y-7 overflow-y-auto">
           <StatsRow apps={apps} />
           <CategoryChips selected={category} onChange={setCategory} />
 

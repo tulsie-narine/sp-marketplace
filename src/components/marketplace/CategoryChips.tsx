@@ -12,7 +12,7 @@ export function CategoryChips({ selected, onChange }: CategoryChipsProps) {
         <button
           key={cat}
           onClick={() => onChange(cat)}
-          className={`shrink-0 px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors duration-150 ${
+          className={`shrink-0 px-4 py-2 rounded-lg text-[15px] font-semibold transition-colors duration-150 ${
             selected === cat
               ? "bg-primary text-primary-foreground"
               : "bg-surface-raised text-muted-foreground hover:text-foreground border border-border"

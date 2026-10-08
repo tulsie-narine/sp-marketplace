@@ -17,19 +17,19 @@ export function AppCard({ app }: AppCardProps) {
   return (
     <button
       onClick={() => navigate(`/marketplace/${app.id}`)}
-      className="group text-left w-full bg-card border border-border rounded-lg p-5 hover:border-primary/50 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/5 transition-all duration-200 animate-fade-in"
+      className="group text-left w-full surface-panel p-6 hover:border-primary/50 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-primary/10 transition-all duration-200 animate-fade-in"
     >
       <div className="flex items-start justify-between mb-3">
-        <span className="text-3xl">{app.icon}</span>
-        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase tracking-wide ${statusColors[app.status]}`}>
+        <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-3xl">{app.icon}</span>
+        <span className={`text-xs px-2.5 py-1 rounded-full font-semibold uppercase tracking-wide ${statusColors[app.status]}`}>
           {app.status}
         </span>
       </div>
-      <h3 className="font-heading font-bold text-foreground mb-1 group-hover:text-primary transition-colors duration-150">
+      <h3 className="text-lg font-heading font-bold text-foreground mb-2 group-hover:text-primary transition-colors duration-150">
         {app.name}
       </h3>
-      <p className="text-sm text-muted-foreground line-clamp-2 mb-3">{app.description}</p>
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
+      <p className="text-[15px] leading-6 text-muted-foreground line-clamp-3 mb-5">{app.description}</p>
+      <div className="flex items-center justify-between text-sm text-muted-foreground">
         <span>{app.category}</span>
         <span>v{app.version}</span>
       </div>

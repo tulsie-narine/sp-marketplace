@@ -21,11 +21,11 @@ export function StatsRow({ apps }: StatsRowProps) {
   ];
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
       {stats.map((s) => (
-        <div key={s.label} className="bg-card border border-border rounded-lg p-4">
-          <p className="text-xs text-muted-foreground mb-1">{s.label}</p>
-          <p className={`text-2xl font-heading font-bold ${s.color}`}>{s.value}</p>
+        <div key={s.label} className="surface-panel p-5">
+          <p className="eyebrow mb-2">{s.label}</p>
+          <p className={`text-3xl font-heading font-bold ${s.color}`}>{s.value}</p>
         </div>
       ))}
     </div>

@@ -48,38 +48,38 @@ export default function AppDetail() {
   return (
     <div className="min-h-screen bg-background">
       
-      <div className="max-w-4xl mx-auto p-6 space-y-6">
+      <div className="max-w-6xl mx-auto p-8 space-y-8">
         {/* Back */}
         <button
           onClick={() => navigate("/marketplace")}
-          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors duration-150"
+          className="flex items-center gap-2 text-[15px] text-muted-foreground hover:text-foreground transition-colors duration-150"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Marketplace
         </button>
 
         {/* Header */}
-        <div className="bg-card border border-border rounded-lg p-6 flex items-start gap-5 animate-fade-in">
-          <span className="text-5xl">{app.icon}</span>
+        <div className="surface-panel p-8 flex items-start gap-6 animate-fade-in">
+          <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-5xl">{app.icon}</span>
           <div className="flex-1">
             <div className="flex items-center gap-3 mb-1">
-              <h1 className="text-2xl font-heading font-extrabold">{app.name}</h1>
-              <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase tracking-wide ${statusColors[app.status]}`}>
+              <h1 className="text-3xl font-heading font-extrabold">{app.name}</h1>
+              <span className={`text-xs px-2.5 py-1 rounded-full font-semibold uppercase tracking-wide ${statusColors[app.status]}`}>
                 {app.status}
               </span>
             </div>
-            <p className="text-sm text-muted-foreground mb-2">
+            <p className="text-[15px] text-muted-foreground mb-3">
               v{app.version} · {app.author} · {app.category}
             </p>
-            <p className="text-sm text-foreground">{app.description}</p>
+            <p className="text-base leading-7 text-foreground">{app.description}</p>
           </div>
         </div>
 
         {/* How it works */}
-        <div className="bg-card border border-border rounded-lg p-5">
-          <h3 className="font-heading font-bold text-sm text-foreground mb-2">How it works</h3>
-          <p className="text-sm text-muted-foreground leading-relaxed">{app.how_it_works}</p>
-          <p className="text-xs text-muted-foreground mt-3 font-mono">
+        <div className="surface-panel p-6">
+          <h3 className="text-lg font-heading font-bold text-foreground mb-3">How it works</h3>
+          <p className="text-base text-muted-foreground leading-7">{app.how_it_works}</p>
+          <p className="text-sm text-muted-foreground mt-4 font-mono">
             Endpoint: {app.api_endpoint}
           </p>
         </div>
