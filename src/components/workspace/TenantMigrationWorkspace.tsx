@@ -538,7 +538,6 @@ export function TenantMigrationWorkspace({
     setDestinationClients([]);
     setClientMappings([]);
     setSelectedObjects(DEFAULT_SELECTED_OBJECTS);
-    setActionItemAssigneeEmail("");
     setMigrationProgress([]);
     setMigrationResult(null);
     setMigrationRunning(false);

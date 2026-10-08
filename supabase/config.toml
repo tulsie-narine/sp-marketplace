@@ -8,3 +8,5 @@ verify_jwt = false
 
 [functions.lcm-data-reset-cron]
 verify_jwt = false
+[functions.user-vault]
+verify_jwt = false

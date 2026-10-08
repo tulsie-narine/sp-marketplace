@@ -1,4 +1,4 @@
-import { supabase } from "@/integrations/supabase/client";
+import { callVault } from "@/lib/user-vault-api";
 import type { SelectedObjects } from "@/lib/tenant-migration-api";
 
 export interface LcmDataResetConfig {
@@ -58,61 +58,26 @@ function fromRow(row: any): LcmDataResetConfig {
   };
 }
 
+// Configs are owned by the session API key (via the user-vault function).
 export async function listConfigs(): Promise<LcmDataResetConfig[]> {
-  const { data, error } = await supabase
-    .from("lcm_data_reset_configs")
-    .select("*")
-    .order("updated_at", { ascending: false });
-  if (error) throw error;
+  const { data } = await callVault<{ data: any[] }>("lcm.list");
   return (data || []).map(fromRow);
 }
 
 export async function saveConfig(input: SaveConfigInput): Promise<LcmDataResetConfig> {
-  const { data: userData, error: userError } = await supabase.auth.getUser();
-  if (userError || !userData.user) {
-    throw new Error("You must be signed in to save configurations.");
-  }
-  const userId = userData.user.id;
-  const row = toRow(input, userId);
-
-  if (input.id) {
-    const { data, error } = await supabase
-      .from("lcm_data_reset_configs")
-      .update(row)
-      .eq("id", input.id)
-      .select()
-      .single();
-    if (error) throw error;
-    return fromRow(data);
-  }
-
-  const { data, error } = await supabase
-    .from("lcm_data_reset_configs")
-    .insert(row)
-    .select()
-    .single();
-  if (error) throw error;
+  const { id, destinationApiKey: _ignored, ...config } = input;
+  const { data } = await callVault<{ data: any }>("lcm.save", { id, config });
   return fromRow(data);
 }
 
 export async function deleteConfig(id: string): Promise<void> {
-  const { error } = await supabase
-    .from("lcm_data_reset_configs")
-    .delete()
-    .eq("id", id);
-  if (error) throw error;
+  await callVault("lcm.delete", { id });
 }
 
 export async function setScheduleEnabled(
   id: string,
   enabled: boolean
 ): Promise<LcmDataResetConfig> {
-  const { data, error } = await supabase
-    .from("lcm_data_reset_configs")
-    .update({ schedule_enabled: enabled })
-    .eq("id", id)
-    .select()
-    .single();
-  if (error) throw error;
+  const { data } = await callVault<{ data: any }>("lcm.setSchedule", { id, enabled });
   return fromRow(data);
 }

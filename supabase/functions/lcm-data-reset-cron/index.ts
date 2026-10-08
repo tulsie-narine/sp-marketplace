@@ -36,7 +36,8 @@ type SelectedObjects = {
 
 interface ConfigRow {
   id: string;
-  user_id: string;
+  user_id: string | null;
+  owner_hash: string | null;
   name: string;
   destination_api_key: string;
   source_client_id: string;
@@ -527,6 +528,7 @@ async function runConfig(supabaseAdmin: ReturnType<typeof createClient>, cfg: Co
   await supabaseAdmin.from("lcm_data_reset_runs").insert({
     config_id: cfg.id,
     user_id: cfg.user_id,
+    owner_hash: cfg.owner_hash,
     trigger_type: "scheduled",
     status,
     finished_at: new Date().toISOString(),
@@ -569,6 +571,13 @@ Deno.serve(async (req) => {
     const results: Array<Record<string, unknown>> = [];
     for (const cfg of (configs || []) as unknown as ConfigRow[]) {
       try {
+        // Key-owned configs always use the currently saved key; skip if it was forgotten.
+        if (cfg.owner_hash) {
+          const { data: saved } = await supabaseAdmin
+            .from("saved_api_keys").select("api_key").eq("key_hash", cfg.owner_hash).maybeSingle();
+          if (!saved?.api_key) throw new Error("No saved API key for this configuration.");
+          cfg.destination_api_key = (saved as { api_key: string }).api_key;
+        }
         const r = await runConfig(supabaseAdmin, cfg);
         results.push({ config_id: cfg.id, name: cfg.name, ...r });
       } catch (err) {
@@ -577,6 +586,7 @@ Deno.serve(async (req) => {
         await supabaseAdmin.from("lcm_data_reset_runs").insert({
           config_id: cfg.id,
           user_id: cfg.user_id,
+          owner_hash: cfg.owner_hash,
           trigger_type: "scheduled",
           status: "error",
           finished_at: new Date().toISOString(),

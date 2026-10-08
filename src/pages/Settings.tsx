@@ -3,6 +3,7 @@ import { useAppStore } from "@/context/AppStoreContext";
 import { maskApiKey } from "@/lib/scalepad-api";
 import { useNavigate } from "react-router-dom";
 import { Sidebar } from "@/components/layout/Sidebar";
+import { SavedKeyCard } from "@/components/settings/SavedKeyCard";
 
 import { useState } from "react";
 import { toast } from "sonner";
@@ -80,6 +81,8 @@ export default function SettingsPage() {
               Change API Key
             </button>
           </div>
+
+          {role !== "admin" && <SavedKeyCard />}
 
           {/* Admin section */}
           {role === "admin" && (

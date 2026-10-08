@@ -76,12 +76,13 @@ export type Database = {
           last_run_status: string | null
           last_run_summary: Json | null
           name: string
+          owner_hash: string | null
           schedule_enabled: boolean
           selected_objects: Json
           source_client_id: string
           source_client_name: string
           updated_at: string
-          user_id: string
+          user_id: string | null
         }
         Insert: {
           created_at?: string
@@ -93,12 +94,13 @@ export type Database = {
           last_run_status?: string | null
           last_run_summary?: Json | null
           name?: string
+          owner_hash?: string | null
           schedule_enabled?: boolean
           selected_objects?: Json
           source_client_id: string
           source_client_name: string
           updated_at?: string
-          user_id: string
+          user_id?: string | null
         }
         Update: {
           created_at?: string
@@ -110,12 +112,13 @@ export type Database = {
           last_run_status?: string | null
           last_run_summary?: Json | null
           name?: string
+          owner_hash?: string | null
           schedule_enabled?: boolean
           selected_objects?: Json
           source_client_id?: string
           source_client_name?: string
           updated_at?: string
-          user_id?: string
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -126,13 +129,14 @@ export type Database = {
           error_message: string | null
           finished_at: string | null
           id: string
+          owner_hash: string | null
           started_at: string
           status: string
           total_created: number
           total_deleted: number
           total_failures: number
           trigger_type: string
-          user_id: string
+          user_id: string | null
         }
         Insert: {
           config_id: string
@@ -140,13 +144,14 @@ export type Database = {
           error_message?: string | null
           finished_at?: string | null
           id?: string
+          owner_hash?: string | null
           started_at?: string
           status: string
           total_created?: number
           total_deleted?: number
           total_failures?: number
           trigger_type: string
-          user_id: string
+          user_id?: string | null
         }
         Update: {
           config_id?: string
@@ -154,13 +159,14 @@ export type Database = {
           error_message?: string | null
           finished_at?: string | null
           id?: string
+          owner_hash?: string | null
           started_at?: string
           status?: string
           total_created?: number
           total_deleted?: number
           total_failures?: number
           trigger_type?: string
-          user_id?: string
+          user_id?: string | null
         }
         Relationships: [
           {
@@ -171,6 +177,69 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      saved_api_keys: {
+        Row: {
+          api_key: string
+          created_at: string
+          key_hash: string
+          updated_at: string
+        }
+        Insert: {
+          api_key: string
+          created_at?: string
+          key_hash: string
+          updated_at?: string
+        }
+        Update: {
+          api_key?: string
+          created_at?: string
+          key_hash?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      scheduled_tasks: {
+        Row: {
+          app_id: string
+          config: Json
+          created_at: string
+          id: string
+          last_run_at: string | null
+          last_run_status: string | null
+          last_run_summary: Json | null
+          name: string
+          owner_hash: string
+          schedule_enabled: boolean
+          updated_at: string
+        }
+        Insert: {
+          app_id: string
+          config?: Json
+          created_at?: string
+          id?: string
+          last_run_at?: string | null
+          last_run_status?: string | null
+          last_run_summary?: Json | null
+          name?: string
+          owner_hash: string
+          schedule_enabled?: boolean
+          updated_at?: string
+        }
+        Update: {
+          app_id?: string
+          config?: Json
+          created_at?: string
+          id?: string
+          last_run_at?: string | null
+          last_run_status?: string | null
+          last_run_summary?: Json | null
+          name?: string
+          owner_hash?: string
+          schedule_enabled?: boolean
+          updated_at?: string
+        }
+        Relationships: []
       }
     }
     Views: {
