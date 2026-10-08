@@ -3,6 +3,7 @@ import { maskApiKey } from "@/lib/scalepad-api";
 import { CATEGORIES } from "@/lib/constants";
 import { useNavigate, useLocation } from "react-router-dom";
 import { LogOut, LayoutGrid, Clock, Shield, Settings } from "lucide-react";
+import { ScalePadLogo } from "@/components/branding/ScalePadLogo";
 
 interface SidebarProps {
   selectedCategory: string;
@@ -23,10 +24,8 @@ export function Sidebar({ selectedCategory, onCategoryChange, apps }: SidebarPro
     <aside className="fixed left-0 top-0 bottom-0 w-72 bg-surface border-r border-border flex flex-col z-30">
       {/* Logo */}
       <div className="px-6 py-5 border-b border-border">
-        <h1 className="text-xl font-heading font-bold text-foreground tracking-tight">
-          ⚡ ScalePad
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">App Marketplace</p>
+        <ScalePadLogo compact />
+        <p className="text-sm text-muted-foreground mt-2">App Marketplace</p>
       </div>
 
       {/* Navigation */}

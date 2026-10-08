@@ -3,6 +3,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { KeyRound, Shield, Loader2 } from "lucide-react";
+import { ScalePadLogo } from "@/components/branding/ScalePadLogo";
 
 export default function Login() {
   const [tab, setTab] = useState<"user" | "admin">("user");
@@ -55,8 +56,8 @@ export default function Login() {
       <div className="w-full max-w-md animate-fade-in">
         {/* Branding */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-heading font-extrabold text-foreground">⚡ ScalePad</h1>
-          <p className="text-muted-foreground mt-1">App Marketplace</p>
+          <div className="flex justify-center"><ScalePadLogo /></div>
+          <p className="text-muted-foreground mt-3 text-base">App Marketplace</p>
         </div>
 
         {/* Card */}
