@@ -10,7 +10,6 @@ interface AuthState {
   adminEmail: string | null;
   loginAsUser: (apiKey: string) => boolean;
   loginAsAdmin: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  signUpAdmin: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   /** SHA-256 hash of the API key for identifying users without storing raw key */
   userHash: string;
@@ -109,22 +108,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { success: true };
   }, []);
 
-  const signUpAdmin = useCallback(async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
-    const { data, error } = await supabase.auth.signUp({ email, password });
-    if (error) return { success: false, error: error.message };
-    if (!data.user) return { success: false, error: "Signup failed" };
-
-    setApiKey("admin-key");
-    setRole("admin");
-    setIsAuthenticated(true);
-    setAdminEmail(data.user.email || null);
-    sessionStorage.setItem("sp_api_key", "admin-key");
-    sessionStorage.setItem("sp_role", "admin");
-    sessionStorage.setItem("sp_auth", "1");
-    sessionStorage.setItem("sp_admin_email", data.user.email || "");
-    return { success: true };
-  }, []);
-
   const logout = useCallback(async () => {
     if (role === "admin") {
       await supabase.auth.signOut();
@@ -150,7 +133,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ apiKey, role, isAuthenticated, adminEmail, loginAsUser, loginAsAdmin, signUpAdmin, logout, userHash, recentApps, addRecentApp }}
+      value={{ apiKey, role, isAuthenticated, adminEmail, loginAsUser, loginAsAdmin, logout, userHash, recentApps, addRecentApp }}
     >
       {children}
     </AuthContext.Provider>

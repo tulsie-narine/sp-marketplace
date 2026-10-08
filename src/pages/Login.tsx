@@ -10,9 +10,8 @@ export default function Login() {
   const [apiKey, setApiKey] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
-  const { loginAsUser, loginAsAdmin, signUpAdmin } = useAuth();
+  const { loginAsUser, loginAsAdmin } = useAuth();
   const navigate = useNavigate();
 
   const handleUserLogin = () => {
@@ -30,21 +29,11 @@ export default function Login() {
     }
     setLoading(true);
     try {
-      if (isSignUp) {
-        const result = await signUpAdmin(email, password);
-        if (result.success) {
-          toast.success("Admin account created");
-          navigate("/marketplace");
-        } else {
-          toast.error(result.error || "Signup failed");
-        }
+      const result = await loginAsAdmin(email, password);
+      if (result.success) {
+        navigate("/marketplace");
       } else {
-        const result = await loginAsAdmin(email, password);
-        if (result.success) {
-          navigate("/marketplace");
-        } else {
-          toast.error(result.error || "Login failed");
-        }
+        toast.error(result.error || "Login failed");
       }
     } finally {
       setLoading(false);
@@ -141,13 +130,7 @@ export default function Login() {
                   className="w-full h-10 bg-primary hover:bg-primary/90 disabled:opacity-50 text-primary-foreground font-medium rounded-md text-sm transition-colors duration-150 flex items-center justify-center gap-2"
                 >
                   {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-                  {isSignUp ? "Create Admin Account" : "Login"}
-                </button>
-                <button
-                  onClick={() => setIsSignUp(!isSignUp)}
-                  className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {isSignUp ? "Already have an account? Login" : "First time? Create admin account"}
+                  Login
                 </button>
               </div>
             )}
