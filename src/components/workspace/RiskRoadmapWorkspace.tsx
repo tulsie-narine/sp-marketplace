@@ -54,6 +54,13 @@ import {
   createActionItem,
   deployInitiative,
 } from "@/lib/risk-roadmap-api";
+import {
+  listRoadmapSyncTasks,
+  runRoadmapSync,
+  saveRoadmapSyncTask,
+  setRoadmapSyncSchedule,
+  type RoadmapSyncConfig,
+} from "@/lib/risk-roadmap-sync-api";
 
 const PAGE_SIZE = 10;
 
@@ -560,6 +567,7 @@ function WorkspaceScreen({
   onBulkBundle, page, totalPages, onPageChange, heatmapData,
 }: WorkspaceScreenProps) {
   const [expandedRiskIds, setExpandedRiskIds] = useState<Set<number>>(new Set());
+  const [workspaceTab, setWorkspaceTab] = useState<"risks" | "actionItems">("risks");
 
   if (loading) {
     return (
@@ -611,6 +619,12 @@ function WorkspaceScreen({
   };
 
   return (
+    <Tabs value={workspaceTab} onValueChange={(value) => setWorkspaceTab(value as "risks" | "actionItems")}>
+      <TabsList className="bg-[#111520]">
+        <TabsTrigger value="risks">Risk Registry</TabsTrigger>
+        <TabsTrigger value="actionItems">Action Items</TabsTrigger>
+      </TabsList>
+      <TabsContent value="risks">
     <div className="space-y-4">
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" onClick={onBack}>
@@ -793,6 +807,128 @@ function WorkspaceScreen({
       ) : (
         <HeatmapView data={heatmapData} />
       )}
+    </div>
+      </TabsContent>
+      <TabsContent value="actionItems">
+        <ActionItemsView client={client} actionItems={clientActionItems} />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+function ActionItemsView({ client, actionItems }: { client: PortfolioClient; actionItems: ActionItem[] }) {
+  const [tasks, setTasks] = useState<Array<{ id: string; name: string; config: RoadmapSyncConfig; schedule_enabled: boolean; last_run_at: string | null; last_run_status: string | null; last_run_summary: Record<string, unknown> | null }>>([]);
+  const [taskName, setTaskName] = useState("ControlMap to Roadmap");
+  const [sourceType, setSourceType] = useState<RoadmapSyncConfig["sourceType"]>("action_items");
+  const [horizonMonths, setHorizonMonths] = useState<RoadmapSyncConfig["horizonMonths"]>(6);
+  const [onRemoved, setOnRemoved] = useState<RoadmapSyncConfig["onRemoved"]>("decline");
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const loadTasks = useCallback(async () => {
+    try {
+      const rows = await listRoadmapSyncTasks();
+      const matching = rows.filter((task) => task.config?.clientId === client.id);
+      setTasks(matching);
+      const current = matching[0];
+      if (current) {
+        setSelectedTaskId(current.id);
+        setTaskName(current.name);
+        setSourceType(current.config.sourceType || "action_items");
+        setHorizonMonths(current.config.horizonMonths || 6);
+        setOnRemoved(current.config.onRemoved || "decline");
+        setScheduleEnabled(current.schedule_enabled);
+      } else {
+        setSelectedTaskId(undefined);
+        setScheduleEnabled(false);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load sync tasks.");
+    }
+  }, [client.id]);
+
+  useEffect(() => { loadTasks(); }, [loadTasks]);
+
+  const config: RoadmapSyncConfig = {
+    clientId: client.id,
+    clientName: client.name,
+    sourceType,
+    onRemoved,
+    skipStatuses: ["Not Applicable"],
+    horizonMonths,
+  };
+
+  const save = async (enabled = scheduleEnabled) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const task = await saveRoadmapSyncTask({ id: selectedTaskId, name: taskName || "ControlMap to Roadmap", config, scheduleEnabled: enabled });
+      setSelectedTaskId(task.id);
+      setScheduleEnabled(task.schedule_enabled);
+      setMessage(enabled ? "Sync task saved and scheduled." : "Sync task saved. Schedule is disabled.");
+      await loadTasks();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save sync task.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const run = async (mode: "dry-run" | "live") => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      let taskId = selectedTaskId;
+      if (!taskId) {
+        const task = await saveRoadmapSyncTask({ name: taskName || "ControlMap to Roadmap", config, scheduleEnabled: false });
+        taskId = task.id;
+        setSelectedTaskId(task.id);
+      }
+      const result = await runRoadmapSync(taskId, mode);
+      setMessage(`${mode === "live" ? "Live sync" : "Dry run"} ${result.status}: ${JSON.stringify(result.summary)}`);
+      await loadTasks();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to run sync.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="font-heading font-bold text-base">Action Items</h3>
+        <p className="text-xs text-muted-foreground mt-1">ControlMap action items for {client.name}, with optional Lifecycle Manager reconciliation.</p>
+      </div>
+      <div className="border border-border rounded-lg overflow-hidden">
+        <table className="w-full text-sm">
+          <thead><tr className="border-b border-border bg-[#111520]"><th className="text-left px-3 py-2">ID</th><th className="text-left px-3 py-2">Weakness</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Priority</th></tr></thead>
+          <tbody>
+            {actionItems.map((item) => <tr key={item.id} className="border-b border-border"><td className="px-3 py-2 font-mono text-xs text-muted-foreground">{item.id}</td><td className="px-3 py-2">{item.weakness_name}</td><td className="px-3 py-2 text-xs">{item.status}</td><td className="px-3 py-2 text-xs">{item.priority}</td></tr>)}
+            {actionItems.length === 0 && <tr><td colSpan={4} className="px-3 py-8 text-center text-muted-foreground">No action items found.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div className="border border-border rounded-lg p-4 space-y-3">
+        <div><h4 className="font-heading font-bold text-sm">Roadmap sync task</h4><p className="text-xs text-muted-foreground mt-1">The scheduled runner uses the saved ScalePad key and keeps per-item sync state.</p></div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <FieldLabel label="Task name"><Input value={taskName} onChange={(event) => setTaskName(event.target.value)} className="bg-[#111520]" /></FieldLabel>
+          <FieldLabel label="Source"><Select value={sourceType} onValueChange={(value) => setSourceType(value as RoadmapSyncConfig["sourceType"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="action_items">ControlMap Action Items</SelectItem><SelectItem value="risks">ControlMap Risk Registry</SelectItem></SelectContent></Select></FieldLabel>
+          <FieldLabel label="No-date roadmap horizon"><Select value={String(horizonMonths)} onValueChange={(value) => setHorizonMonths(Number(value) as RoadmapSyncConfig["horizonMonths"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="3">3 months</SelectItem><SelectItem value="6">6 months</SelectItem><SelectItem value="12">12 months</SelectItem></SelectContent></Select></FieldLabel>
+          <FieldLabel label="Removed or skipped source item"><Select value={onRemoved} onValueChange={(value) => setOnRemoved(value as RoadmapSyncConfig["onRemoved"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="decline">Decline initiative</SelectItem><SelectItem value="ignore">Leave initiative unchanged</SelectItem></SelectContent></Select></FieldLabel>
+        </div>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /> Enable scheduled sync</label>
+        {message && <p className="text-xs text-muted-foreground border border-border rounded-md p-2">{message}</p>}
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" disabled={busy} onClick={() => save(false)}>Save task</Button>
+          <Button variant="outline" disabled={busy} onClick={() => run("dry-run")}>Preview dry run</Button>
+          <Button disabled={busy} onClick={() => run("live")}>Run live sync</Button>
+          {selectedTaskId && <Button variant="ghost" disabled={busy} onClick={() => save(!scheduleEnabled)}>{scheduleEnabled ? "Disable schedule" : "Enable schedule"}</Button>}
+        </div>
+        {tasks[0]?.last_run_at && <p className="text-[11px] text-muted-foreground">Last run: {new Date(tasks[0].last_run_at).toLocaleString()} · {tasks[0].last_run_status || "unknown"}</p>}
+      </div>
     </div>
   );
 }

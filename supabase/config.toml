@@ -10,3 +10,6 @@ verify_jwt = false
 verify_jwt = false
 [functions.user-vault]
 verify_jwt = false
+
+[functions.risk-roadmap-sync]
+verify_jwt = false
