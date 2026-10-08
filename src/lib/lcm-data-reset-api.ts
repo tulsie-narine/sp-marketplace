@@ -335,7 +335,6 @@ export async function runLcmDataReset({
       selectedObjects,
       sourceClients: [sourceClient],
       destinationClients: [destinationClient],
-      actionItemAssigneeEmail,
       onClientProgress: (_innerIndex, migrationProgress) => {
         progress.stage = "migrate";
         progress.migration = migrationProgress;

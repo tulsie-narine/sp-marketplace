@@ -650,10 +650,10 @@ function extractActionItemAssigneeEmails(record: Record<string, any>) {
         continue;
       }
       if (!isRecord(item)) continue;
-      push(item.email);
-      push(item.contact_info?.email);
-      push(item.user?.email);
-      push(item.member?.email);
+      push((item as any).email);
+      push((item as any).contact_info?.email);
+      push((item as any).user?.email);
+      push((item as any).member?.email);
     }
   }
 
@@ -1845,7 +1845,7 @@ async function fetchAssessmentTemplates(
         typeof item.question_count === "number" ? item.question_count : undefined;
       return id && title ? { id, title, questionCount } : null;
     })
-    .filter((item): item is AssessmentTemplateOverview => Boolean(item));
+    .filter((item: any): item is AssessmentTemplateOverview => Boolean(item));
 }
 
 async function fetchAssessmentTemplateDetail(

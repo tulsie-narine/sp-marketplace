@@ -1,5 +1,4 @@
 import { callVault } from "@/lib/user-vault-api";
-import { supabase } from "@/integrations/supabase/client";
 import type { SelectedObjects } from "@/lib/tenant-migration-api";
 
 export interface LcmDataResetConfig {
