@@ -3,6 +3,7 @@ import { useAppStore } from "@/context/AppStoreContext";
 import { maskApiKey } from "@/lib/scalepad-api";
 import { useNavigate } from "react-router-dom";
 import { Sidebar } from "@/components/layout/Sidebar";
+import { SavedKeyCard } from "@/components/settings/SavedKeyCard";
 
 import { useState } from "react";
 import { toast } from "sonner";
