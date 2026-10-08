@@ -819,7 +819,7 @@ function WorkspaceScreen({
 function ActionItemsView({ client, actionItems }: { client: PortfolioClient; actionItems: ActionItem[] }) {
   const [tasks, setTasks] = useState<Array<{ id: string; name: string; config: RoadmapSyncConfig; schedule_enabled: boolean; last_run_at: string | null; last_run_status: string | null; last_run_summary: Record<string, unknown> | null }>>([]);
   const [taskChoice, setTaskChoice] = useState("new");
-  const [taskName, setTaskName] = useState("ControlMap to Roadmap");
+  const [taskName, setTaskName] = useState("ControlMap to LMX Roadmap");
   const [sourceType, setSourceType] = useState<RoadmapSyncConfig["sourceType"]>("action_items");
   const [horizonMonths, setHorizonMonths] = useState<RoadmapSyncConfig["horizonMonths"]>(6);
   const [onRemoved, setOnRemoved] = useState<RoadmapSyncConfig["onRemoved"]>("decline");
@@ -885,7 +885,7 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
     setTaskChoice(id);
     if (id === "new") {
       setSelectedTaskId(undefined);
-      setTaskName("ControlMap to Roadmap");
+      setTaskName("ControlMap to LMX Roadmap");
       setSourceType("action_items");
       setHorizonMonths(6);
       setOnRemoved("decline");
@@ -921,7 +921,7 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
     setBusy(true);
     setMessage(null);
     try {
-      const task = await saveRoadmapSyncTask({ id: selectedTaskId, name: taskName || "ControlMap to Roadmap", config, scheduleEnabled: enabled });
+      const task = await saveRoadmapSyncTask({ id: selectedTaskId, name: taskName || "ControlMap to LMX Roadmap", config, scheduleEnabled: enabled });
       setSelectedTaskId(task.id);
       setTaskChoice(task.id);
       setScheduleEnabled(task.schedule_enabled);
@@ -940,7 +940,7 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
     try {
       let taskId = selectedTaskId;
       if (!taskId) {
-        const task = await saveRoadmapSyncTask({ name: taskName || "ControlMap to Roadmap", config, scheduleEnabled: false });
+        const task = await saveRoadmapSyncTask({ name: taskName || "ControlMap to LMX Roadmap", config, scheduleEnabled: false });
         taskId = task.id;
         setSelectedTaskId(task.id);
         setTaskChoice(task.id);

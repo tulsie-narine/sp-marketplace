@@ -1,5 +1,5 @@
 /**
- * Risk-to-Roadmap Builder API helpers.
+ * ControlMap to LMX Roadmap Builder API helpers.
  * All calls proxied through scalepad-proxy edge function.
  */
 

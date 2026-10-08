@@ -13,7 +13,7 @@ The marketplace ships with seven registered apps:
 | **Goal Manager** | Planning | Builds or clones a goal and deploys it across selected clients with progress and error feedback. |
 | **Tenant Migration** | Utilities | Maps clients between two ScalePad tenants and migrates selected Lifecycle Manager data with retries and an error log. |
 | **Client Clean Up** | Utilities | Permanently removes selected Lifecycle Manager data for selected clients by object type. |
-| **Risk-to-Roadmap Builder** | Reporting | Reviews portfolio risk, creates ControlMap action plans, and promotes priorities into Lifecycle Manager initiatives. |
+| **ControlMap to LMX Roadmap Builder** | Reporting | Reviews ControlMap risks and action items, then promotes selected priorities into Lifecycle Manager initiatives. |
 | **LCM Data Reset** | Utilities | Runs a controlled Lifecycle Manager reset workflow based on the tenant migration and cleanup orchestration. |
 
 All seven apps are seeded in [`src/lib/mock-data.ts`](src/lib/mock-data.ts). App metadata includes the name, description, category, status, version, API endpoint, and workspace type. New apps can be added from the admin area and are persisted in the browser under the `sp_apps` key.

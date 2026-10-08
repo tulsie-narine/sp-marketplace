@@ -1,4 +1,4 @@
--- Durable reconciliation state for the Risk-to-Roadmap Builder.
+-- Durable reconciliation state for the ControlMap to LMX Roadmap Builder.
 -- API keys remain in saved_api_keys; these tables only store sync metadata.
 
 CREATE TABLE IF NOT EXISTS public.saved_api_keys (
