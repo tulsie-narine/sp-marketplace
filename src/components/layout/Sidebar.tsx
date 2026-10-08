@@ -23,7 +23,7 @@ export function Sidebar({ selectedCategory, onCategoryChange, apps }: SidebarPro
   return (
     <aside className="fixed left-0 top-0 bottom-0 w-72 bg-surface border-r border-border flex flex-col z-30">
       {/* Logo */}
-      <div className="px-6 py-5 border-b border-border">
+      <div className="px-4 py-5 border-b border-border">
         <ScalePadLogo compact />
         <p className="ml-14 -mt-2 text-sm text-muted-foreground">App Marketplace</p>
       </div>
