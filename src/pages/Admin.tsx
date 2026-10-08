@@ -6,6 +6,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { AppFormModal } from "@/components/admin/AppFormModal";
 import { DeleteConfirmModal } from "@/components/admin/DeleteConfirmModal";
 import { Pencil, Trash2, Plus } from "lucide-react";
+import { ScalePadMark } from "@/components/branding/ScalePadMark";
 
 const statusColors: Record<string, string> = {
   active: "bg-success/15 text-success",
@@ -55,7 +56,9 @@ export default function Admin() {
               <tbody>
                 {apps.map((app) => (
                   <tr key={app.id} className="border-b border-border last:border-0 hover:bg-muted/20 transition-colors duration-150">
-                    <td className="p-3 text-xl">{app.icon}</td>
+                    <td className="p-3 text-primary">
+                      {app.id === "app-012" ? <ScalePadMark className="h-7 w-7" /> : <span className="text-xl">{app.icon}</span>}
+                    </td>
                     <td className="p-3 font-medium text-foreground">{app.name}</td>
                     <td className="p-3 text-muted-foreground">{app.category}</td>
                     <td className="p-3">

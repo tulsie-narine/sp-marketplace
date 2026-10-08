@@ -1,5 +1,6 @@
 import { MarketplaceApp } from "@/lib/constants";
 import { useNavigate } from "react-router-dom";
+import { ScalePadMark } from "@/components/branding/ScalePadMark";
 
 interface AppCardProps {
   app: MarketplaceApp;
@@ -20,7 +21,9 @@ export function AppCard({ app }: AppCardProps) {
       className="group text-left w-full surface-panel p-6 hover:border-primary/50 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-primary/10 transition-all duration-200 animate-fade-in"
     >
       <div className="flex items-start justify-between mb-3">
-        <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-3xl">{app.icon}</span>
+        <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
+          {app.id === "app-012" ? <ScalePadMark className="h-8 w-8" /> : <span className="text-3xl">{app.icon}</span>}
+        </span>
         <span className={`text-xs px-2.5 py-1 rounded-full font-semibold uppercase tracking-wide ${statusColors[app.status]}`}>
           {app.status}
         </span>

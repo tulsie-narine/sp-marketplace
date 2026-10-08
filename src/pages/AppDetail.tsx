@@ -11,6 +11,7 @@ import { LcmDataResetWorkspace } from "@/components/workspace/LcmDataResetWorksp
 import { ClientCleanUpWorkspace } from "@/components/workspace/ClientCleanUpWorkspace";
 import { RiskRoadmapWorkspace } from "@/components/workspace/RiskRoadmapWorkspace";
 import { AppRatingsComments } from "@/components/marketplace/AppRatingsComments";
+import { ScalePadMark } from "@/components/branding/ScalePadMark";
 
 import { ArrowLeft } from "lucide-react";
 
@@ -60,7 +61,9 @@ export default function AppDetail() {
 
         {/* Header */}
         <div className="surface-panel p-8 flex items-start gap-6 animate-fade-in">
-          <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-5xl">{app.icon}</span>
+          <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+            {app.id === "app-012" ? <ScalePadMark className="h-11 w-11" /> : <span className="text-5xl">{app.icon}</span>}
+          </span>
           <div className="flex-1">
             <div className="flex items-center gap-3 mb-1">
               <h1 className="text-3xl font-heading font-extrabold">{app.name}</h1>

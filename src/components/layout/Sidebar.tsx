@@ -4,6 +4,7 @@ import { CATEGORIES } from "@/lib/constants";
 import { useNavigate, useLocation } from "react-router-dom";
 import { LogOut, LayoutGrid, Clock, Shield, Settings } from "lucide-react";
 import { ScalePadLogo } from "@/components/branding/ScalePadLogo";
+import { ScalePadMark } from "@/components/branding/ScalePadMark";
 
 interface SidebarProps {
   selectedCategory: string;
@@ -53,7 +54,9 @@ export function Sidebar({ selectedCategory, onCategoryChange, apps }: SidebarPro
                 onClick={() => navigate(`/marketplace/${app.id}`)}
                 className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[15px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors duration-150"
               >
-                <span>{app.icon}</span>
+                <span className="text-primary">
+                  {app.id === "app-012" ? <ScalePadMark className="h-5 w-5" /> : app.icon}
+                </span>
                 <span className="truncate">{app.name}</span>
               </button>
             ))}
