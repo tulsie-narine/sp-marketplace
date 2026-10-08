@@ -818,6 +818,7 @@ function WorkspaceScreen({
 
 function ActionItemsView({ client, actionItems }: { client: PortfolioClient; actionItems: ActionItem[] }) {
   const [tasks, setTasks] = useState<Array<{ id: string; name: string; config: RoadmapSyncConfig; schedule_enabled: boolean; last_run_at: string | null; last_run_status: string | null; last_run_summary: Record<string, unknown> | null }>>([]);
+  const [taskChoice, setTaskChoice] = useState("new");
   const [taskName, setTaskName] = useState("ControlMap to Roadmap");
   const [sourceType, setSourceType] = useState<RoadmapSyncConfig["sourceType"]>("action_items");
   const [horizonMonths, setHorizonMonths] = useState<RoadmapSyncConfig["horizonMonths"]>(6);
@@ -826,6 +827,21 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
   const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [priorityFilter, setPriorityFilter] = useState("All");
+  const [search, setSearch] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const statuses = useMemo(() => ["All", ...Array.from(new Set(actionItems.map((item) => item.status).filter(Boolean))).sort()], [actionItems]);
+  const priorities = useMemo(() => ["All", ...Array.from(new Set(actionItems.map((item) => item.priority).filter(Boolean))).sort()], [actionItems]);
+  const filteredActionItems = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return actionItems.filter((item) =>
+      (statusFilter === "All" || item.status === statusFilter) &&
+      (priorityFilter === "All" || item.priority === priorityFilter) &&
+      (!query || `${item.id} ${item.weakness_name}`.toLowerCase().includes(query))
+    );
+  }, [actionItems, priorityFilter, search, statusFilter]);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -835,14 +851,18 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
       const current = matching[0];
       if (current) {
         setSelectedTaskId(current.id);
+        setTaskChoice(current.id);
         setTaskName(current.name);
         setSourceType(current.config.sourceType || "action_items");
         setHorizonMonths(current.config.horizonMonths || 6);
         setOnRemoved(current.config.onRemoved || "decline");
         setScheduleEnabled(current.schedule_enabled);
+        setSelectedIds(new Set(current.config.selectedSourceIds || []));
       } else {
         setSelectedTaskId(undefined);
+        setTaskChoice("new");
         setScheduleEnabled(false);
+        setSelectedIds(new Set());
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load sync tasks.");
@@ -858,7 +878,44 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
     onRemoved,
     skipStatuses: ["Not Applicable"],
     horizonMonths,
+    selectedSourceIds: Array.from(selectedIds),
   };
+
+  const selectTask = (id: string) => {
+    setTaskChoice(id);
+    if (id === "new") {
+      setSelectedTaskId(undefined);
+      setTaskName("ControlMap to Roadmap");
+      setSourceType("action_items");
+      setHorizonMonths(6);
+      setOnRemoved("decline");
+      setScheduleEnabled(false);
+      setSelectedIds(new Set());
+      return;
+    }
+    const task = tasks.find((candidate) => candidate.id === id);
+    if (!task) return;
+    setSelectedTaskId(task.id);
+    setTaskName(task.name);
+    setSourceType(task.config.sourceType || "action_items");
+    setHorizonMonths(task.config.horizonMonths || 6);
+    setOnRemoved(task.config.onRemoved || "decline");
+    setScheduleEnabled(task.schedule_enabled);
+    setSelectedIds(new Set(task.config.selectedSourceIds || []));
+  };
+
+  const toggleSelected = (id: string) => setSelectedIds((current) => {
+    const next = new Set(current);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
+  const selectVisible = () => setSelectedIds((current) => {
+    const next = new Set(current);
+    const allSelected = filteredActionItems.length > 0 && filteredActionItems.every((item) => next.has(String(item.id)));
+    filteredActionItems.forEach((item) => allSelected ? next.delete(String(item.id)) : next.add(String(item.id)));
+    return next;
+  });
 
   const save = async (enabled = scheduleEnabled) => {
     setBusy(true);
@@ -866,6 +923,7 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
     try {
       const task = await saveRoadmapSyncTask({ id: selectedTaskId, name: taskName || "ControlMap to Roadmap", config, scheduleEnabled: enabled });
       setSelectedTaskId(task.id);
+      setTaskChoice(task.id);
       setScheduleEnabled(task.schedule_enabled);
       setMessage(enabled ? "Sync task saved and scheduled." : "Sync task saved. Schedule is disabled.");
       await loadTasks();
@@ -885,6 +943,7 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
         const task = await saveRoadmapSyncTask({ name: taskName || "ControlMap to Roadmap", config, scheduleEnabled: false });
         taskId = task.id;
         setSelectedTaskId(task.id);
+        setTaskChoice(task.id);
       }
       const result = await runRoadmapSync(taskId, mode);
       setMessage(`${mode === "live" ? "Live sync" : "Dry run"} ${result.status}: ${JSON.stringify(result.summary)}`);
@@ -902,17 +961,25 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
         <h3 className="font-heading font-bold text-base">Action Items</h3>
         <p className="text-xs text-muted-foreground mt-1">ControlMap action items for {client.name}, with optional Lifecycle Manager reconciliation.</p>
       </div>
+      <div className="flex flex-wrap gap-2 items-center">
+        <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search action items" className="bg-[#111520] w-full sm:w-64" />
+        <FilterSelect label="Status" value={statusFilter} options={statuses} onChange={setStatusFilter} />
+        <FilterSelect label="Priority" value={priorityFilter} options={priorities} onChange={setPriorityFilter} />
+        <Button size="sm" variant="outline" onClick={selectVisible}>{filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id))) ? "Clear visible" : "Select visible"}</Button>
+        <span className="text-xs text-muted-foreground">{filteredActionItems.length} shown · {selectedIds.size} selected</span>
+      </div>
       <div className="border border-border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
-          <thead><tr className="border-b border-border bg-[#111520]"><th className="text-left px-3 py-2">ID</th><th className="text-left px-3 py-2">Weakness</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Priority</th></tr></thead>
+          <thead><tr className="border-b border-border bg-[#111520]"><th className="px-3 py-2 w-8"><input type="checkbox" aria-label="Select visible action items" checked={filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id)))} onChange={selectVisible} /></th><th className="text-left px-3 py-2">ID</th><th className="text-left px-3 py-2">Weakness</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Priority</th></tr></thead>
           <tbody>
-            {actionItems.map((item) => <tr key={item.id} className="border-b border-border"><td className="px-3 py-2 font-mono text-xs text-muted-foreground">{item.id}</td><td className="px-3 py-2">{item.weakness_name}</td><td className="px-3 py-2 text-xs">{item.status}</td><td className="px-3 py-2 text-xs">{item.priority}</td></tr>)}
-            {actionItems.length === 0 && <tr><td colSpan={4} className="px-3 py-8 text-center text-muted-foreground">No action items found.</td></tr>}
+            {filteredActionItems.map((item) => <tr key={item.id} className="border-b border-border"><td className="px-3 py-2"><input type="checkbox" aria-label={`Select action item ${item.id}`} checked={selectedIds.has(String(item.id))} onChange={() => toggleSelected(String(item.id))} /></td><td className="px-3 py-2 font-mono text-xs text-muted-foreground">{item.id}</td><td className="px-3 py-2">{item.weakness_name}</td><td className="px-3 py-2 text-xs">{item.status}</td><td className="px-3 py-2 text-xs">{item.priority}</td></tr>)}
+            {filteredActionItems.length === 0 && <tr><td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">No action items match these filters.</td></tr>}
           </tbody>
         </table>
       </div>
       <div className="border border-border rounded-lg p-4 space-y-3">
         <div><h4 className="font-heading font-bold text-sm">Roadmap sync task</h4><p className="text-xs text-muted-foreground mt-1">The scheduled runner uses the saved ScalePad key and keeps per-item sync state.</p></div>
+        <FieldLabel label="Saved task"><Select value={taskChoice} onValueChange={selectTask}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="new">New sync task</SelectItem>{tasks.map((task) => <SelectItem key={task.id} value={task.id}>{task.name}{task.schedule_enabled ? " · scheduled" : ""}</SelectItem>)}</SelectContent></Select></FieldLabel>
         <div className="grid gap-3 md:grid-cols-2">
           <FieldLabel label="Task name"><Input value={taskName} onChange={(event) => setTaskName(event.target.value)} className="bg-[#111520]" /></FieldLabel>
           <FieldLabel label="Source"><Select value={sourceType} onValueChange={(value) => setSourceType(value as RoadmapSyncConfig["sourceType"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="action_items">ControlMap Action Items</SelectItem><SelectItem value="risks">ControlMap Risk Registry</SelectItem></SelectContent></Select></FieldLabel>

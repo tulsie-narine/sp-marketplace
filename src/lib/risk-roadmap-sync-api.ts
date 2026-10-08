@@ -10,6 +10,7 @@ export type RoadmapSyncConfig = {
   onRemoved: "decline" | "ignore";
   skipStatuses: string[];
   horizonMonths: 3 | 6 | 12;
+  selectedSourceIds: string[];
 };
 
 export const listRoadmapSyncTasks = () => listTasks(RISK_ROADMAP_APP_ID) as Promise<ScheduledTask<RoadmapSyncConfig>[]>;
