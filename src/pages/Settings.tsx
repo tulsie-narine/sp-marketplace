@@ -81,6 +81,8 @@ export default function SettingsPage() {
             </button>
           </div>
 
+          {role !== "admin" && <SavedKeyCard />}
+
           {/* Admin section */}
           {role === "admin" && (
             <div className="bg-card border border-border rounded-lg p-5 space-y-4">

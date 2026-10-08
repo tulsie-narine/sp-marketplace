@@ -587,7 +587,6 @@ Deno.serve(async (req) => {
           config_id: cfg.id,
           user_id: cfg.user_id,
           owner_hash: cfg.owner_hash,
-    owner_hash: cfg.owner_hash,
           trigger_type: "scheduled",
           status: "error",
           finished_at: new Date().toISOString(),
