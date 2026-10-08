@@ -57,7 +57,6 @@ export default function Login() {
         {/* Branding */}
         <div className="text-center mb-8">
           <div className="flex justify-center"><ScalePadLogo /></div>
-          <p className="text-muted-foreground mt-3 text-base">App Marketplace</p>
         </div>
 
         {/* Card */}
