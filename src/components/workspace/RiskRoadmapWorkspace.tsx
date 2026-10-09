@@ -266,8 +266,32 @@ export function RiskRoadmapWorkspace() {
 
   const openBulkBundle = () => {
     const selected = clientRisks.filter((r) => selectedRiskIds.has(r.id));
-    if (selected.length === 0) return;
-    openDrawerForRisks(selected);
+    openDrawerForRisks(selected.length > 0 ? selected : filteredRisks);
+  };
+
+  const openDrawerForActionItems = (items: ActionItem[]) => {
+    const source = items.length > 0 ? items : clientActionItems;
+    const risks: ClientRisk[] = source.map((item, index) => ({
+      id: Number(item.id) || -(index + 1),
+      code: `AI-${item.id}`,
+      name: item.weakness_name,
+      description: "",
+      owner: null,
+      status: item.status,
+      department: "",
+      risk_category: "Action Item",
+      treatment: "",
+      business_impact: "",
+      inherent_risk_score: 0,
+      inherent_risk_label: item.priority,
+      current_risk_score: 0,
+      current_risk_label: item.priority,
+      target_risk_score: 0,
+      target_risk_label: item.priority,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }));
+    openDrawerForRisks(risks);
   };
 
   const trackRiskWork = useCallback(
@@ -367,6 +391,7 @@ export function RiskRoadmapWorkspace() {
               }}
               onPlanRisk={(r) => openDrawerForRisks([r])}
               onBulkBundle={openBulkBundle}
+              onPlanActionItems={openDrawerForActionItems}
               page={riskPage}
               totalPages={riskPages}
               onPageChange={setRiskPage}
@@ -553,6 +578,7 @@ interface WorkspaceScreenProps {
   onToggleSelect: (id: number) => void;
   onPlanRisk: (r: ClientRisk) => void;
   onBulkBundle: () => void;
+  onPlanActionItems: (items: ActionItem[]) => void;
   page: number;
   totalPages: number;
   onPageChange: (p: number) => void;
@@ -565,6 +591,7 @@ function WorkspaceScreen({
   categoryFilter, onCategoryFilter, categories, sortBy, onSortBy,
   viewMode, onViewMode, selectedIds, onToggleSelect, onPlanRisk,
   onBulkBundle, page, totalPages, onPageChange, heatmapData,
+  onPlanActionItems,
 }: WorkspaceScreenProps) {
   const [expandedRiskIds, setExpandedRiskIds] = useState<Set<number>>(new Set());
   const [workspaceTab, setWorkspaceTab] = useState<"risks" | "actionItems">("risks");
@@ -647,6 +674,7 @@ function WorkspaceScreen({
           { value: "newest", label: "Newest" },
           { value: "oldest", label: "Oldest" },
         ]} onChange={onSortBy} />
+        <Button size="sm" onClick={onBulkBundle}>Plan selected / all</Button>
         <div className="ml-auto flex gap-1">
           <Button size="sm" variant={viewMode === "table" ? "default" : "ghost"} onClick={() => onViewMode("table")}>Table</Button>
           <Button size="sm" variant={viewMode === "heatmap" ? "default" : "ghost"} onClick={() => onViewMode("heatmap")}>Heatmap</Button>
@@ -810,13 +838,13 @@ function WorkspaceScreen({
     </div>
       </TabsContent>
       <TabsContent value="actionItems">
-        <ActionItemsView client={client} actionItems={clientActionItems} />
+        <ActionItemsView client={client} actionItems={clientActionItems} onPlanActionItems={onPlanActionItems} />
       </TabsContent>
     </Tabs>
   );
 }
 
-function ActionItemsView({ client, actionItems }: { client: PortfolioClient; actionItems: ActionItem[] }) {
+function ActionItemsView({ client, actionItems, onPlanActionItems }: { client: PortfolioClient; actionItems: ActionItem[]; onPlanActionItems: (items: ActionItem[]) => void }) {
   const [tasks, setTasks] = useState<Array<{ id: string; name: string; config: RoadmapSyncConfig; schedule_enabled: boolean; last_run_at: string | null; last_run_status: string | null; last_run_summary: Record<string, unknown> | null }>>([]);
   const [taskChoice, setTaskChoice] = useState("new");
   const [taskName, setTaskName] = useState("ControlMap to LMX Roadmap");
@@ -832,6 +860,8 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
   const [priorityFilter, setPriorityFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [actionPage, setActionPage] = useState(0);
+  const [scheduleDrawerOpen, setScheduleDrawerOpen] = useState(false);
 
   const statuses = useMemo(() => ["All", ...Array.from(new Set(actionItems.map((item) => item.status).filter(Boolean))).sort()], [actionItems]);
   const priorities = useMemo(() => ["All", ...Array.from(new Set(actionItems.map((item) => item.priority).filter(Boolean))).sort()], [actionItems]);
@@ -843,6 +873,11 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
       (!query || `${item.id} ${item.weakness_name}`.toLowerCase().includes(query))
     );
   }, [actionItems, priorityFilter, search, statusFilter]);
+  const actionPages = Math.ceil(filteredActionItems.length / PAGE_SIZE);
+  const actionSlice = filteredActionItems.slice(actionPage * PAGE_SIZE, (actionPage + 1) * PAGE_SIZE);
+  useEffect(() => {
+    setActionPage((page) => Math.min(page, Math.max(0, actionPages - 1)));
+  }, [actionPages]);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -929,6 +964,11 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
     });
   };
 
+  const openPlanning = () => {
+    const selected = actionItems.filter((item) => selectedIds.has(String(item.id)));
+    onPlanActionItems(selected.length > 0 ? selected : filteredActionItems);
+  };
+
   const save = async (enabled = scheduleEnabled) => {
     setBusy(true);
     setMessage(null);
@@ -978,19 +1018,33 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
         <FilterSelect label="Status" value={statusFilter} options={statuses} onChange={setStatusFilter} />
         <FilterSelect label="Priority" value={priorityFilter} options={priorities} onChange={setPriorityFilter} />
         <Button size="sm" variant="outline" onClick={selectVisible}>{filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id))) ? "Clear visible" : "Select visible"}</Button>
+        <Button size="sm" onClick={openPlanning}>Plan selected / all</Button>
+        <Button size="sm" variant="outline" onClick={() => setScheduleDrawerOpen(true)}>Configure schedule</Button>
         <span className="text-xs text-muted-foreground">{filteredActionItems.length} shown · {selectedIds.size} selected</span>
       </div>
       <div className="border border-border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead><tr className="border-b border-border bg-[#111520]"><th className="px-3 py-2 w-8"><input type="checkbox" aria-label="Select visible action items" checked={filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id)))} onChange={selectVisible} /></th><th className="text-left px-3 py-2">ID</th><th className="text-left px-3 py-2">Weakness</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Priority</th></tr></thead>
           <tbody>
-            {filteredActionItems.map((item) => <tr key={item.id} className="border-b border-border"><td className="px-3 py-2"><input type="checkbox" aria-label={`Select action item ${item.id}`} checked={selectedIds.has(String(item.id))} onChange={() => toggleSelected(String(item.id))} /></td><td className="px-3 py-2 font-mono text-xs text-muted-foreground">{item.id}</td><td className="px-3 py-2">{item.weakness_name}</td><td className="px-3 py-2 text-xs">{item.status}</td><td className="px-3 py-2 text-xs">{item.priority}</td></tr>)}
+            {actionSlice.map((item) => <tr key={item.id} className="border-b border-border"><td className="px-3 py-2"><input type="checkbox" aria-label={`Select action item ${item.id}`} checked={selectedIds.has(String(item.id))} onChange={() => toggleSelected(String(item.id))} /></td><td className="px-3 py-2 font-mono text-xs text-muted-foreground">{item.id}</td><td className="px-3 py-2">{item.weakness_name}</td><td className="px-3 py-2 text-xs">{item.status}</td><td className="px-3 py-2 text-xs">{item.priority}</td></tr>)}
             {filteredActionItems.length === 0 && <tr><td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">No action items match these filters.</td></tr>}
           </tbody>
         </table>
       </div>
-      <div className="border border-border rounded-lg p-4 space-y-3">
-        <div><h4 className="font-heading font-bold text-sm">Roadmap sync task</h4><p className="text-xs text-muted-foreground mt-1">The scheduled runner uses the saved ScalePad key and keeps per-item sync state.</p></div>
+      {actionPages > 1 && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>Page {actionPage + 1} of {actionPages} ({filteredActionItems.length} action items)</span>
+          <div className="flex gap-1">
+            <Button size="sm" variant="ghost" disabled={actionPage === 0} onClick={() => setActionPage((page) => page - 1)}>&lt;- Prev</Button>
+            <Button size="sm" variant="ghost" disabled={actionPage >= actionPages - 1} onClick={() => setActionPage((page) => page + 1)}>Next -&gt;</Button>
+          </div>
+        </div>
+      )}
+      <Sheet open={scheduleDrawerOpen} onOpenChange={setScheduleDrawerOpen}>
+        <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
+          <SheetHeader><SheetTitle>Roadmap sync schedule</SheetTitle></SheetHeader>
+          <div className="border border-border rounded-lg p-4 space-y-3 mt-6">
+            <div><h4 className="font-heading font-bold text-sm">Roadmap sync task</h4><p className="text-xs text-muted-foreground mt-1">Schedule all current items or a selected scope. Existing roadmap items are updated instead of duplicated.</p></div>
         <FieldLabel label="Saved task"><Select value={taskChoice} onValueChange={selectTask}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="new">New sync task</SelectItem>{tasks.map((task) => <SelectItem key={task.id} value={task.id}>{task.name}{task.schedule_enabled ? " · scheduled" : ""}</SelectItem>)}</SelectContent></Select></FieldLabel>
         <div className="grid gap-3 md:grid-cols-2">
           <FieldLabel label="Task name"><Input value={taskName} onChange={(event) => setTaskName(event.target.value)} className="bg-[#111520]" /></FieldLabel>
@@ -1013,7 +1067,9 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
           {selectedTaskId && <Button variant="ghost" disabled={busy} onClick={() => save(!scheduleEnabled)}>{scheduleEnabled ? "Disable schedule" : "Enable schedule"}</Button>}
         </div>
         {tasks[0]?.last_run_at && <p className="text-[11px] text-muted-foreground">Last run: {new Date(tasks[0].last_run_at).toLocaleString()} · {tasks[0].last_run_status || "unknown"}</p>}
-      </div>
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
