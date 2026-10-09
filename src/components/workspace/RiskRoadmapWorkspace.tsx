@@ -956,7 +956,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
     if (id === "new") {
       setSelectedTaskId(undefined);
       setTaskName("ControlMap to LMX Roadmap");
-      setSourceType("action_items");
+      setSourceType(scheduleSource);
       setDestination("initiatives");
       setHorizonMonths(6);
       setOnRemoved("decline");
