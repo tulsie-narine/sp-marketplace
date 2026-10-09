@@ -1083,9 +1083,14 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
         <Button size="sm" variant="outline" onClick={selectVisible}>{filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id))) ? "Clear visible" : "Select visible"}</Button>
         <Button size="sm" onClick={openPlanning}>Plan selected / all</Button>
         <Button size="sm" variant="outline" onClick={() => { setTaskChoice("new"); setSelectedTaskId(undefined); setTaskName("ControlMap to LMX Roadmap"); setSourceType("action_items"); setDestination("initiatives"); setSyncAllItems(selectedIds.size === 0); setScheduleEnabled(false); setScheduleDrawerOpen(true); }}>Configure sync ({tasks.length})</Button>
-        {selectedIds.size > 0 && <Button size="sm" variant="ghost" onClick={() => { setSelectedIds(new Set()); setSelectionMemory(new Set()); setSyncAllItems(true); }}>Clear selection</Button>}
         <span className="text-xs text-muted-foreground">{filteredActionItems.length} shown · {selectedIds.size} selected</span>
       </div>
+      {selectedIds.size > 0 && (
+        <div className="bg-primary/10 border border-primary/20 rounded-lg px-4 py-2 flex items-center justify-between">
+          <span className="text-sm">{selectedIds.size} action item{selectedIds.size === 1 ? "" : "s"} selected</span>
+          <Button size="sm" variant="ghost" onClick={() => { setSelectedIds(new Set()); setSelectionMemory(new Set()); setSyncAllItems(true); }}>Clear selection</Button>
+        </div>
+      )}
       <div className="border border-border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead><tr className="border-b border-border bg-[#111520]"><th className="px-3 py-2 w-8"><input type="checkbox" aria-label="Select visible action items" checked={filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id)))} onChange={selectVisible} /></th><th className="text-left px-3 py-2">ID</th><th className="text-left px-3 py-2">Weakness</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Priority</th></tr></thead>
