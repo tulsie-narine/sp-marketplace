@@ -887,7 +887,7 @@ function WorkspaceScreen({
 function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleRequest, scheduleSource, scheduleSelection, onTaskCountChange }: { client: PortfolioClient; actionItems: ActionItem[]; onPlanActionItems: (items: ActionItem[]) => void; scheduleRequest: number; scheduleSource: RoadmapSyncConfig["sourceType"]; scheduleSelection: string[]; onTaskCountChange: (count: number) => void }) {
   const [tasks, setTasks] = useState<Array<{ id: string; name: string; config: RoadmapSyncConfig; schedule_enabled: boolean; last_run_at: string | null; last_run_status: string | null; last_run_summary: Record<string, unknown> | null }>>([]);
   const [taskChoice, setTaskChoice] = useState("new");
-  const [taskName, setTaskName] = useState("ControlMap to LMX Roadmap");
+  const [taskName, setTaskName] = useState("ControlMap to LMX Workstream Sync");
   const [sourceType, setSourceType] = useState<RoadmapSyncConfig["sourceType"]>("action_items");
   const [destination, setDestination] = useState<RoadmapSyncConfig["destination"]>("initiatives");
   const [syncFrequencyHours, setSyncFrequencyHours] = useState<RoadmapSyncConfig["syncFrequencyHours"]>(24);
@@ -925,7 +925,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
     if (scheduleRequest > 0) {
       setTaskChoice("new");
       setSelectedTaskId(undefined);
-      setTaskName("ControlMap to LMX Roadmap");
+      setTaskName("ControlMap to LMX Workstream Sync");
       setSourceType(scheduleSource);
       setDestination("initiatives");
       setSyncFrequencyHours(24);
@@ -991,7 +991,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
     if (id === "new") {
       const preservedSelection = selectionMemory.size > 0 ? selectionMemory : selectedIds;
       setSelectedTaskId(undefined);
-      setTaskName("ControlMap to LMX Roadmap");
+      setTaskName("ControlMap to LMX Workstream Sync");
       setSourceType(scheduleSource);
       setDestination("initiatives");
       setSyncFrequencyHours(24);
@@ -1061,7 +1061,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
     setBusy(true);
     setMessage(null);
     try {
-      const task = await saveRoadmapSyncTask({ id: selectedTaskId, name: taskName || "ControlMap to LMX Roadmap", config, scheduleEnabled: enabled });
+      const task = await saveRoadmapSyncTask({ id: selectedTaskId, name: taskName || "ControlMap to LMX Workstream Sync", config, scheduleEnabled: enabled });
       setSelectedTaskId(task.id);
       setTaskChoice(task.id);
       setScheduleEnabled(task.schedule_enabled);
@@ -1080,7 +1080,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
     try {
       let taskId = selectedTaskId;
       if (!taskId) {
-        const task = await saveRoadmapSyncTask({ name: taskName || "ControlMap to LMX Roadmap", config, scheduleEnabled: false });
+        const task = await saveRoadmapSyncTask({ name: taskName || "ControlMap to LMX Workstream Sync", config, scheduleEnabled: false });
         taskId = task.id;
         setSelectedTaskId(task.id);
         setTaskChoice(task.id);
@@ -1107,7 +1107,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
         <FilterSelect label="Priority" value={priorityFilter} options={priorities} onChange={setPriorityFilter} />
         <Button size="sm" variant="outline" onClick={selectVisible}>{filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id))) ? "Clear visible" : "Select visible"}</Button>
         <Button size="sm" onClick={openPlanning}>Plan selected / all</Button>
-        <Button size="sm" variant="outline" onClick={() => { setTaskChoice("new"); setSelectedTaskId(undefined); setTaskName("ControlMap to LMX Roadmap"); setSourceType("action_items"); setDestination("initiatives"); setSyncAllItems(selectedIds.size === 0); setScheduleEnabled(false); setScheduleDrawerOpen(true); }}>Configure sync ({tasks.length})</Button>
+        <Button size="sm" variant="outline" onClick={() => { setTaskChoice("new"); setSelectedTaskId(undefined); setTaskName("ControlMap to LMX Workstream Sync"); setSourceType("action_items"); setDestination("initiatives"); setSyncAllItems(selectedIds.size === 0); setScheduleEnabled(false); setScheduleDrawerOpen(true); }}>Configure sync ({tasks.length})</Button>
         <span className="text-xs text-muted-foreground">{filteredActionItems.length} shown · {selectedIds.size} selected</span>
       </div>
       {selectedIds.size > 0 && (

@@ -103,7 +103,7 @@ export const SEED_APPS: MarketplaceApp[] = [
   },
   {
     id: "app-012",
-    name: "ControlMap to LMX Roadmap Builder",
+    name: "ControlMap to LMX Workstream Sync",
     description:
       "Review ControlMap risks and action items, then sync selected priorities into Lifecycle Manager initiatives or action items for QBR-ready strategic roadmaps.",
     how_it_works:

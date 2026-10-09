@@ -1,5 +1,5 @@
 /**
- * ControlMap to LMX Roadmap Builder API helpers.
+ * ControlMap to LMX Workstream Sync API helpers.
  * All calls proxied through scalepad-proxy edge function.
  */
 
