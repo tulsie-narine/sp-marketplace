@@ -605,6 +605,7 @@ function WorkspaceScreen({
   const [workspaceTab, setWorkspaceTab] = useState<"risks" | "actionItems">("risks");
   const [scheduleRequest, setScheduleRequest] = useState(0);
   const [scheduleSource, setScheduleSource] = useState<RoadmapSyncConfig["sourceType"]>("action_items");
+  const [scheduleSelection, setScheduleSelection] = useState<string[]>([]);
 
   if (loading) {
     return (
@@ -685,7 +686,7 @@ function WorkspaceScreen({
           { value: "oldest", label: "Oldest" },
         ]} onChange={onSortBy} />
         <Button size="sm" onClick={onBulkBundle}>Plan selected / all</Button>
-        <Button size="sm" variant="outline" onClick={() => { setScheduleSource("risks"); setScheduleRequest((request) => request + 1); }}>Configure sync ({scheduleTaskCount})</Button>
+        <Button size="sm" variant="outline" onClick={() => { setScheduleSource("risks"); setScheduleSelection(Array.from(selectedIds).map(String)); setScheduleRequest((request) => request + 1); }}>Configure sync ({scheduleTaskCount})</Button>
         <div className="ml-auto flex gap-1">
           <Button size="sm" variant={viewMode === "table" ? "default" : "ghost"} onClick={() => onViewMode("table")}>Table</Button>
           <Button size="sm" variant={viewMode === "heatmap" ? "default" : "ghost"} onClick={() => onViewMode("heatmap")}>Heatmap</Button>
@@ -849,13 +850,13 @@ function WorkspaceScreen({
     </div>
       </TabsContent>
       <TabsContent value="actionItems" forceMount>
-        <ActionItemsView client={client} actionItems={clientActionItems} onPlanActionItems={onPlanActionItems} scheduleRequest={scheduleRequest} scheduleSource={scheduleSource} onTaskCountChange={onTaskCountChange} />
+        <ActionItemsView client={client} actionItems={clientActionItems} onPlanActionItems={onPlanActionItems} scheduleRequest={scheduleRequest} scheduleSource={scheduleSource} scheduleSelection={scheduleSelection} onTaskCountChange={onTaskCountChange} />
       </TabsContent>
     </Tabs>
   );
 }
 
-function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleRequest, scheduleSource, onTaskCountChange }: { client: PortfolioClient; actionItems: ActionItem[]; onPlanActionItems: (items: ActionItem[]) => void; scheduleRequest: number; scheduleSource: RoadmapSyncConfig["sourceType"]; onTaskCountChange: (count: number) => void }) {
+function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleRequest, scheduleSource, scheduleSelection, onTaskCountChange }: { client: PortfolioClient; actionItems: ActionItem[]; onPlanActionItems: (items: ActionItem[]) => void; scheduleRequest: number; scheduleSource: RoadmapSyncConfig["sourceType"]; scheduleSelection: string[]; onTaskCountChange: (count: number) => void }) {
   const [tasks, setTasks] = useState<Array<{ id: string; name: string; config: RoadmapSyncConfig; schedule_enabled: boolean; last_run_at: string | null; last_run_status: string | null; last_run_summary: Record<string, unknown> | null }>>([]);
   const [taskChoice, setTaskChoice] = useState("new");
   const [taskName, setTaskName] = useState("ControlMap to LMX Roadmap");
@@ -899,12 +900,12 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
       setDestination("initiatives");
       setHorizonMonths(6);
       setOnRemoved("decline");
-      setSyncAllItems(true);
+      setSyncAllItems(scheduleSelection.length === 0);
       setScheduleEnabled(false);
-      setSelectedIds(new Set());
+      setSelectedIds(new Set(scheduleSelection));
       setScheduleDrawerOpen(true);
     }
-  }, [scheduleRequest, scheduleSource]);
+  }, [scheduleRequest, scheduleSource, scheduleSelection]);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -1067,7 +1068,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
         <FilterSelect label="Priority" value={priorityFilter} options={priorities} onChange={setPriorityFilter} />
         <Button size="sm" variant="outline" onClick={selectVisible}>{filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id))) ? "Clear visible" : "Select visible"}</Button>
         <Button size="sm" onClick={openPlanning}>Plan selected / all</Button>
-        <Button size="sm" variant="outline" onClick={() => { setTaskChoice("new"); setSelectedTaskId(undefined); setTaskName("ControlMap to LMX Roadmap"); setSourceType("action_items"); setDestination("initiatives"); setScheduleEnabled(false); setScheduleDrawerOpen(true); }}>Configure sync ({tasks.length})</Button>
+        <Button size="sm" variant="outline" onClick={() => { setTaskChoice("new"); setSelectedTaskId(undefined); setTaskName("ControlMap to LMX Roadmap"); setSourceType("action_items"); setDestination("initiatives"); setSyncAllItems(selectedIds.size === 0); setScheduleEnabled(false); setScheduleDrawerOpen(true); }}>Configure sync ({tasks.length})</Button>
         <span className="text-xs text-muted-foreground">{filteredActionItems.length} shown · {selectedIds.size} selected</span>
       </div>
       <div className="border border-border rounded-lg overflow-hidden">
@@ -1102,11 +1103,16 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
           <FieldLabel label="Removed or skipped source item"><Select value={onRemoved} onValueChange={(value) => setOnRemoved(value as RoadmapSyncConfig["onRemoved"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="decline">Decline initiative</SelectItem><SelectItem value="ignore">Leave initiative unchanged</SelectItem></SelectContent></Select></FieldLabel>
         </div>
         <div className="space-y-2 rounded-md border border-border bg-[#111520] p-3">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Sync scope</p>
           <label className="flex items-start gap-2 text-sm">
-            <input type="checkbox" checked={syncAllItems} onChange={(event) => { setSyncAllItems(event.target.checked); if (event.target.checked) setSelectedIds(new Set()); }} />
-            <span><span className="font-medium">Sync all current {sourceType === "risks" ? "risk-registry items" : "action items"}</span><span className="block text-xs text-muted-foreground mt-0.5">Each run picks up new records and updates existing Lifecycle Manager records using their ControlMap source ID.</span></span>
+            <input type="radio" name="sync-scope" checked={syncAllItems} onChange={() => setSyncAllItems(true)} />
+            <span><span className="font-medium">Sync all current {sourceType === "risks" ? "risk-registry items" : "action items"}</span><span className="block text-xs text-muted-foreground mt-0.5">New records are created and existing Lifecycle Manager records are updated.</span></span>
           </label>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /> Enable scheduled sync</label>
+          <label className={`flex items-start gap-2 text-sm ${selectedIds.size === 0 ? "opacity-50" : ""}`}>
+            <input type="radio" name="sync-scope" checked={!syncAllItems && selectedIds.size > 0} disabled={selectedIds.size === 0} onChange={() => setSyncAllItems(false)} />
+            <span><span className="font-medium">Sync only selected items ({selectedIds.size})</span><span className="block text-xs text-muted-foreground mt-0.5">Uses the items selected in the {sourceType === "risks" ? "Risk Registry" : "Action Items"} table.</span></span>
+          </label>
+          <label className="flex items-center gap-2 text-sm pt-1"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /> Enable scheduled sync</label>
         </div>
         {message && <p className="text-xs text-muted-foreground border border-border rounded-md p-2">{message}</p>}
         <div className="flex flex-wrap gap-2">
