@@ -12,6 +12,7 @@ type Config = {
   clientId: string;
   clientName?: string;
   sourceType: "action_items" | "risks";
+  destination?: "initiatives" | "action_items";
   onRemoved?: "decline" | "ignore";
   skipStatuses?: string[];
   horizonMonths?: 3 | 6 | 12;
@@ -97,6 +98,9 @@ function sourceSpec(item: SourceItem, config: Config) {
     { type: "paragraph", content: [{ type: "text", text: `Synced from ControlMap ${code}.` }] },
   ]});
   const budget = Number(item.cost) > 0 ? [{ label: `ControlMap ${code} remediation`, cost_subunits: Math.round(Number(item.cost) * 100), cost_type: "Fixed" }] : [];
+  const owner = (item.owner || item.assignee || item.assigned_to) as Record<string, unknown> | undefined;
+  const assignedUserIds = owner?.email ? [{ email: text(owner.email) }] : owner?.id ? [{ id: text(owner.id) }] : [];
+  const dueAt = item.due_at || item.due_date || item.planned_completion_date || item.planned_end_date || null;
   const spec = {
     code,
     name: `${code} · ${title}`.slice(0, 200),
@@ -106,8 +110,17 @@ function sourceSpec(item: SourceItem, config: Config) {
     fiscalQuarter,
     estimatedHours: Number(item.effort_in_hours || item.efforts_in_hours || item.efforts) > 0 ? Number(item.effort_in_hours || item.efforts_in_hours || item.efforts) : null,
     budget,
+    dueAt,
+    assignedUserIds,
+    isCompleted: ["completed", "closed", "remediated"].includes(normalized(status)),
   };
   return { ...spec, fingerprint: JSON.stringify(spec) };
+}
+
+async function applyActionItemSpec(apiKey: string, actionItemId: string, spec: ReturnType<typeof sourceSpec>) {
+  const body = { title: spec.name, description_json: spec.summary, due_at: spec.dueAt };
+  await spCall(apiKey, `/lifecycle-manager/v1/action-items/${actionItemId}`, "PATCH", body);
+  await spCall(apiKey, `/lifecycle-manager/v1/action-items/${actionItemId}/completion-status`, "PUT", { is_completed: spec.isCompleted });
 }
 
 async function applySpec(apiKey: string, initiativeId: string, spec: ReturnType<typeof sourceSpec>, existingBudget: Record<string, unknown>[] = [], created = false) {
@@ -151,8 +164,11 @@ async function runTask(db: ReturnType<typeof createClient>, task: TaskRow, apiKe
     const syncAll = config.syncAll ?? !(config.selectedSourceIds || []).length;
     const selectedIds = new Set((config.selectedSourceIds || []).map(text));
     const source = syncAll ? fetchedSource : fetchedSource.filter((item) => selectedIds.has(text(item.id)));
-    const initiatives = await fetchAll(apiKey, `/lifecycle-manager/v2/initiatives?filter[client.id]=eq:${encodeURIComponent(config.clientId)}&include_unscheduled=true`);
-    const byCode = new Map(initiatives.map((item) => [text(item.name).split(" · ")[0], item]));
+    const destination = config.destination || "initiatives";
+    const targets = destination === "action_items"
+      ? await fetchAll(apiKey, `/lifecycle-manager/v1/action-items?filter[client.id]=eq:${encodeURIComponent(config.clientId)}`)
+      : await fetchAll(apiKey, `/lifecycle-manager/v2/initiatives?filter[client.id]=eq:${encodeURIComponent(config.clientId)}&include_unscheduled=true`);
+    const byCode = new Map(targets.map((item) => [text(item.name || item.title).split(" · ")[0], item]));
     const { data: stateRows, error: stateError } = await db.from("roadmap_sync_items").select("*").eq("task_id", task.id).eq("client_id", config.clientId).eq("source_type", config.sourceType);
     if (stateError) throw stateError;
     const state = new Map((stateRows || []).map((row) => [`${row.source_type}:${row.source_id}`, row]));
@@ -171,16 +187,22 @@ async function runTask(db: ReturnType<typeof createClient>, task: TaskRow, apiKe
         if (!initiativeId) {
           summary.created++;
           if (mode === "live") {
-            const created = await spCall(apiKey, "/lifecycle-manager/v1/initiatives", "POST", { client_key: { id: config.clientId }, name: spec.name, executive_summary_json: spec.summary });
+            const created = destination === "action_items"
+              ? await spCall(apiKey, "/lifecycle-manager/v1/action-items", "POST", { client_key: { id: config.clientId }, title: spec.name, description_json: spec.summary, due_at: spec.dueAt, ...(spec.assignedUserIds.length ? { assigned_user_ids: spec.assignedUserIds } : {}) })
+              : await spCall(apiKey, "/lifecycle-manager/v1/initiatives", "POST", { client_key: { id: config.clientId }, name: spec.name, executive_summary_json: spec.summary });
             initiativeId = text(created.id);
             await db.from("roadmap_sync_items").upsert({ task_id: task.id, owner_hash: task.owner_hash, client_id: config.clientId, source_type: config.sourceType, source_id: sourceId, source_code: spec.code, initiative_id: initiativeId, source_fingerprint: null, retired: false, last_status: "created" }, { onConflict: "task_id,client_id,source_type,source_id" });
-            await applySpec(apiKey, initiativeId, spec, [], true);
+            if (destination === "action_items") await applyActionItemSpec(apiKey, initiativeId, spec);
+            else await applySpec(apiKey, initiativeId, spec, [], true);
           }
         } else {
           summary.updated++;
-          const existing = initiatives.find((candidate) => text(candidate.id) === initiativeId);
+          const existing = targets.find((candidate) => text(candidate.id) === initiativeId);
           const existingBudget = (((existing?.budget as Record<string, unknown> | undefined)?.line_items || []) as Record<string, unknown>[]);
-          if (mode === "live") await applySpec(apiKey, initiativeId, spec, existingBudget, false);
+          if (mode === "live") {
+            if (destination === "action_items") await applyActionItemSpec(apiKey, initiativeId, spec);
+            else await applySpec(apiKey, initiativeId, spec, existingBudget, false);
+          }
         }
         if (mode === "live") await db.from("roadmap_sync_items").upsert({ task_id: task.id, owner_hash: task.owner_hash, client_id: config.clientId, source_type: config.sourceType, source_id: sourceId, source_code: spec.code, initiative_id: initiativeId, source_fingerprint: spec.fingerprint, retired: false, last_status: "success", last_error: null, last_synced_at: new Date().toISOString() }, { onConflict: "task_id,client_id,source_type,source_id" });
       } catch (error) {
@@ -195,7 +217,9 @@ async function runTask(db: ReturnType<typeof createClient>, task: TaskRow, apiKe
       if (row.retired || seen.has(key) || !syncAll) continue;
       summary.declined++;
       if (mode === "live" && row.initiative_id && task.config.onRemoved !== "ignore") {
-        try { await spCall(apiKey, `/lifecycle-manager/v1/initiatives/${row.initiative_id}/status`, "PUT", { status: "Declined" }); } catch { summary.errors++; }
+        if (destination === "initiatives") {
+          try { await spCall(apiKey, `/lifecycle-manager/v1/initiatives/${row.initiative_id}/status`, "PUT", { status: "Declined" }); } catch { summary.errors++; }
+        }
         await db.from("roadmap_sync_items").update({ retired: true, last_status: "declined", last_synced_at: new Date().toISOString() }).eq("id", row.id);
       }
     }

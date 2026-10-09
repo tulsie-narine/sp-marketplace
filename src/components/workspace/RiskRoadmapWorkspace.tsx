@@ -595,6 +595,7 @@ function WorkspaceScreen({
 }: WorkspaceScreenProps) {
   const [expandedRiskIds, setExpandedRiskIds] = useState<Set<number>>(new Set());
   const [workspaceTab, setWorkspaceTab] = useState<"risks" | "actionItems">("risks");
+  const [scheduleRequest, setScheduleRequest] = useState(0);
 
   if (loading) {
     return (
@@ -675,6 +676,7 @@ function WorkspaceScreen({
           { value: "oldest", label: "Oldest" },
         ]} onChange={onSortBy} />
         <Button size="sm" onClick={onBulkBundle}>Plan selected / all</Button>
+        <Button size="sm" variant="outline" onClick={() => { setScheduleRequest((request) => request + 1); setWorkspaceTab("actionItems"); }}>Configure schedule</Button>
         <div className="ml-auto flex gap-1">
           <Button size="sm" variant={viewMode === "table" ? "default" : "ghost"} onClick={() => onViewMode("table")}>Table</Button>
           <Button size="sm" variant={viewMode === "heatmap" ? "default" : "ghost"} onClick={() => onViewMode("heatmap")}>Heatmap</Button>
@@ -838,17 +840,18 @@ function WorkspaceScreen({
     </div>
       </TabsContent>
       <TabsContent value="actionItems">
-        <ActionItemsView client={client} actionItems={clientActionItems} onPlanActionItems={onPlanActionItems} />
+        <ActionItemsView client={client} actionItems={clientActionItems} onPlanActionItems={onPlanActionItems} scheduleRequest={scheduleRequest} />
       </TabsContent>
     </Tabs>
   );
 }
 
-function ActionItemsView({ client, actionItems, onPlanActionItems }: { client: PortfolioClient; actionItems: ActionItem[]; onPlanActionItems: (items: ActionItem[]) => void }) {
+function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleRequest }: { client: PortfolioClient; actionItems: ActionItem[]; onPlanActionItems: (items: ActionItem[]) => void; scheduleRequest: number }) {
   const [tasks, setTasks] = useState<Array<{ id: string; name: string; config: RoadmapSyncConfig; schedule_enabled: boolean; last_run_at: string | null; last_run_status: string | null; last_run_summary: Record<string, unknown> | null }>>([]);
   const [taskChoice, setTaskChoice] = useState("new");
   const [taskName, setTaskName] = useState("ControlMap to LMX Roadmap");
   const [sourceType, setSourceType] = useState<RoadmapSyncConfig["sourceType"]>("action_items");
+  const [destination, setDestination] = useState<RoadmapSyncConfig["destination"]>("initiatives");
   const [horizonMonths, setHorizonMonths] = useState<RoadmapSyncConfig["horizonMonths"]>(6);
   const [onRemoved, setOnRemoved] = useState<RoadmapSyncConfig["onRemoved"]>("decline");
   const [syncAllItems, setSyncAllItems] = useState(true);
@@ -878,6 +881,9 @@ function ActionItemsView({ client, actionItems, onPlanActionItems }: { client: P
   useEffect(() => {
     setActionPage((page) => Math.min(page, Math.max(0, actionPages - 1)));
   }, [actionPages]);
+  useEffect(() => {
+    if (scheduleRequest > 0) setScheduleDrawerOpen(true);
+  }, [scheduleRequest]);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -890,6 +896,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems }: { client: P
         setTaskChoice(current.id);
         setTaskName(current.name);
         setSourceType(current.config.sourceType || "action_items");
+        setDestination(current.config.destination || "initiatives");
         setHorizonMonths(current.config.horizonMonths || 6);
         setOnRemoved(current.config.onRemoved || "decline");
         setSyncAllItems(current.config.syncAll ?? !(current.config.selectedSourceIds || []).length);
@@ -913,6 +920,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems }: { client: P
     clientId: client.id,
     clientName: client.name,
     sourceType,
+    destination,
     onRemoved,
     skipStatuses: ["Not Applicable"],
     horizonMonths,
@@ -926,6 +934,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems }: { client: P
       setSelectedTaskId(undefined);
       setTaskName("ControlMap to LMX Roadmap");
       setSourceType("action_items");
+      setDestination("initiatives");
       setHorizonMonths(6);
       setOnRemoved("decline");
       setSyncAllItems(true);
@@ -938,6 +947,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems }: { client: P
     setSelectedTaskId(task.id);
     setTaskName(task.name);
     setSourceType(task.config.sourceType || "action_items");
+    setDestination(task.config.destination || "initiatives");
     setHorizonMonths(task.config.horizonMonths || 6);
     setOnRemoved(task.config.onRemoved || "decline");
     setSyncAllItems(task.config.syncAll ?? !(task.config.selectedSourceIds || []).length);
@@ -1049,6 +1059,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems }: { client: P
         <div className="grid gap-3 md:grid-cols-2">
           <FieldLabel label="Task name"><Input value={taskName} onChange={(event) => setTaskName(event.target.value)} className="bg-[#111520]" /></FieldLabel>
           <FieldLabel label="Source"><Select value={sourceType} onValueChange={(value) => setSourceType(value as RoadmapSyncConfig["sourceType"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="action_items">ControlMap Action Items</SelectItem><SelectItem value="risks">ControlMap Risk Registry</SelectItem></SelectContent></Select></FieldLabel>
+          <FieldLabel label="Lifecycle Manager destination"><Select value={destination} onValueChange={(value) => setDestination(value as RoadmapSyncConfig["destination"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="initiatives">Initiatives / Roadmap</SelectItem><SelectItem value="action_items">Action Items</SelectItem></SelectContent></Select></FieldLabel>
           <FieldLabel label="No-date roadmap horizon"><Select value={String(horizonMonths)} onValueChange={(value) => setHorizonMonths(Number(value) as RoadmapSyncConfig["horizonMonths"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="3">3 months</SelectItem><SelectItem value="6">6 months</SelectItem><SelectItem value="12">12 months</SelectItem></SelectContent></Select></FieldLabel>
           <FieldLabel label="Removed or skipped source item"><Select value={onRemoved} onValueChange={(value) => setOnRemoved(value as RoadmapSyncConfig["onRemoved"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="decline">Decline initiative</SelectItem><SelectItem value="ignore">Leave initiative unchanged</SelectItem></SelectContent></Select></FieldLabel>
         </div>

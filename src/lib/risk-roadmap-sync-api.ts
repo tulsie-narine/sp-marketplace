@@ -7,6 +7,7 @@ export type RoadmapSyncConfig = {
   clientId: string;
   clientName: string;
   sourceType: "action_items" | "risks";
+  destination: "initiatives" | "action_items";
   onRemoved: "decline" | "ignore";
   skipStatuses: string[];
   horizonMonths: 3 | 6 | 12;
