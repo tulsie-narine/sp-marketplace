@@ -685,7 +685,7 @@ function WorkspaceScreen({
           { value: "oldest", label: "Oldest" },
         ]} onChange={onSortBy} />
         <Button size="sm" onClick={onBulkBundle}>Plan selected / all</Button>
-        <Button size="sm" variant="outline" onClick={() => { setScheduleSource("risks"); setScheduleRequest((request) => request + 1); }}>Configure schedule ({scheduleTaskCount})</Button>
+        <Button size="sm" variant="outline" onClick={() => { setScheduleSource("risks"); setScheduleRequest((request) => request + 1); }}>Configure sync ({scheduleTaskCount})</Button>
         <div className="ml-auto flex gap-1">
           <Button size="sm" variant={viewMode === "table" ? "default" : "ghost"} onClick={() => onViewMode("table")}>Table</Button>
           <Button size="sm" variant={viewMode === "heatmap" ? "default" : "ghost"} onClick={() => onViewMode("heatmap")}>Heatmap</Button>
@@ -1067,7 +1067,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
         <FilterSelect label="Priority" value={priorityFilter} options={priorities} onChange={setPriorityFilter} />
         <Button size="sm" variant="outline" onClick={selectVisible}>{filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id))) ? "Clear visible" : "Select visible"}</Button>
         <Button size="sm" onClick={openPlanning}>Plan selected / all</Button>
-        <Button size="sm" variant="outline" onClick={() => { setTaskChoice("new"); setSelectedTaskId(undefined); setTaskName("ControlMap to LMX Roadmap"); setSourceType("action_items"); setDestination("initiatives"); setScheduleEnabled(false); setScheduleDrawerOpen(true); }}>Configure schedule ({tasks.length})</Button>
+        <Button size="sm" variant="outline" onClick={() => { setTaskChoice("new"); setSelectedTaskId(undefined); setTaskName("ControlMap to LMX Roadmap"); setSourceType("action_items"); setDestination("initiatives"); setScheduleEnabled(false); setScheduleDrawerOpen(true); }}>Configure sync ({tasks.length})</Button>
         <span className="text-xs text-muted-foreground">{filteredActionItems.length} shown · {selectedIds.size} selected</span>
       </div>
       <div className="border border-border rounded-lg overflow-hidden">
@@ -1090,9 +1090,9 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
       )}
       <Sheet open={scheduleDrawerOpen} onOpenChange={setScheduleDrawerOpen}>
         <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
-          <SheetHeader><SheetTitle>Roadmap sync schedule</SheetTitle></SheetHeader>
+          <SheetHeader><SheetTitle>ControlMap to Lifecycle Manager sync</SheetTitle></SheetHeader>
           <div className="border border-border rounded-lg p-4 space-y-3 mt-6">
-            <div><h4 className="font-heading font-bold text-sm">Roadmap sync task</h4><p className="text-xs text-muted-foreground mt-1">Schedule all current items or a selected scope. Existing roadmap items are updated instead of duplicated.</p></div>
+            <div><h4 className="font-heading font-bold text-sm">Sync task</h4><p className="text-xs text-muted-foreground mt-1">Sync ControlMap risks or action items into Lifecycle Manager initiatives or action items. New records are created and existing records are updated instead of duplicated.</p></div>
         <div className="flex items-end gap-2"><FieldLabel label="Saved task"><Select value={taskChoice} onValueChange={selectTask}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="new">New sync task</SelectItem>{tasks.map((task) => <SelectItem key={task.id} value={task.id}>{task.name}{task.schedule_enabled ? " · scheduled" : ""}</SelectItem>)}</SelectContent></Select></FieldLabel>{selectedTaskId && <Button type="button" variant="outline" className="text-destructive hover:text-destructive" disabled={busy} onClick={deleteSelectedTask}>Delete</Button>}</div>
         <div className="grid gap-3 md:grid-cols-2">
           <FieldLabel label="Task name"><Input value={taskName} onChange={(event) => setTaskName(event.target.value)} className="bg-[#111520]" /></FieldLabel>
@@ -1104,7 +1104,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
         <div className="space-y-2 rounded-md border border-border bg-[#111520] p-3">
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" checked={syncAllItems} onChange={(event) => { setSyncAllItems(event.target.checked); if (event.target.checked) setSelectedIds(new Set()); }} />
-            <span><span className="font-medium">Sync all current {sourceType === "risks" ? "risk-registry items" : "action items"}</span><span className="block text-xs text-muted-foreground mt-0.5">Each scheduled run picks up new records and updates existing roadmap items using their ControlMap source ID.</span></span>
+            <span><span className="font-medium">Sync all current {sourceType === "risks" ? "risk-registry items" : "action items"}</span><span className="block text-xs text-muted-foreground mt-0.5">Each run picks up new records and updates existing Lifecycle Manager records using their ControlMap source ID.</span></span>
           </label>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /> Enable scheduled sync</label>
         </div>
