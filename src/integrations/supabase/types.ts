@@ -178,6 +178,115 @@ export type Database = {
           },
         ]
       }
+      roadmap_sync_items: {
+        Row: {
+          client_id: string
+          created_at: string
+          id: string
+          initiative_id: string | null
+          last_error: string | null
+          last_status: string
+          last_synced_at: string | null
+          owner_hash: string
+          retired: boolean
+          source_code: string | null
+          source_fingerprint: string | null
+          source_id: string
+          source_type: string
+          task_id: string
+          updated_at: string
+        }
+        Insert: {
+          client_id: string
+          created_at?: string
+          id?: string
+          initiative_id?: string | null
+          last_error?: string | null
+          last_status?: string
+          last_synced_at?: string | null
+          owner_hash: string
+          retired?: boolean
+          source_code?: string | null
+          source_fingerprint?: string | null
+          source_id: string
+          source_type: string
+          task_id: string
+          updated_at?: string
+        }
+        Update: {
+          client_id?: string
+          created_at?: string
+          id?: string
+          initiative_id?: string | null
+          last_error?: string | null
+          last_status?: string
+          last_synced_at?: string | null
+          owner_hash?: string
+          retired?: boolean
+          source_code?: string | null
+          source_fingerprint?: string | null
+          source_id?: string
+          source_type?: string
+          task_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "roadmap_sync_items_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "scheduled_tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      roadmap_sync_runs: {
+        Row: {
+          error_message: string | null
+          finished_at: string | null
+          id: string
+          mode: string
+          owner_hash: string
+          started_at: string
+          status: string
+          summary: Json
+          task_id: string
+          trigger_type: string
+        }
+        Insert: {
+          error_message?: string | null
+          finished_at?: string | null
+          id?: string
+          mode: string
+          owner_hash: string
+          started_at?: string
+          status: string
+          summary?: Json
+          task_id: string
+          trigger_type: string
+        }
+        Update: {
+          error_message?: string | null
+          finished_at?: string | null
+          id?: string
+          mode?: string
+          owner_hash?: string
+          started_at?: string
+          status?: string
+          summary?: Json
+          task_id?: string
+          trigger_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "roadmap_sync_runs_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "scheduled_tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       saved_api_keys: {
         Row: {
           api_key: string
