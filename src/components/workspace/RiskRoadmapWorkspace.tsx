@@ -391,6 +391,7 @@ export function RiskRoadmapWorkspace() {
                   return next;
                 });
               }}
+              onClearSelection={() => setSelectedRiskIds(new Set())}
               onPlanRisk={(r) => openDrawerForRisks([r])}
               onBulkBundle={openBulkBundle}
               onPlanActionItems={openDrawerForActionItems}
@@ -583,6 +584,7 @@ interface WorkspaceScreenProps {
   onPlanRisk: (r: ClientRisk) => void;
   onBulkBundle: () => void;
   onPlanActionItems: (items: ActionItem[]) => void;
+  onClearSelection: () => void;
   onTaskCountChange: (count: number) => void;
   scheduleTaskCount: number;
   page: number;
@@ -598,6 +600,7 @@ function WorkspaceScreen({
   viewMode, onViewMode, selectedIds, onToggleSelect, onPlanRisk,
   onBulkBundle, page, totalPages, onPageChange, heatmapData,
   onPlanActionItems,
+  onClearSelection,
   onTaskCountChange,
   scheduleTaskCount,
 }: WorkspaceScreenProps) {
@@ -693,9 +696,10 @@ function WorkspaceScreen({
         </div>
       </div>
 
-      {selectedIds.size >= 2 && (
-        <div className="bg-primary/10 border border-primary/20 rounded-lg px-4 py-2">
-          <span className="text-sm">{selectedIds.size} risks selected</span>
+      {selectedIds.size > 0 && (
+        <div className="bg-primary/10 border border-primary/20 rounded-lg px-4 py-2 flex items-center justify-between">
+          <span className="text-sm">{selectedIds.size} risk{selectedIds.size === 1 ? "" : "s"} selected</span>
+          <Button size="sm" variant="ghost" onClick={onClearSelection}>Clear selection</Button>
         </div>
       )}
 
@@ -1079,6 +1083,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
         <Button size="sm" variant="outline" onClick={selectVisible}>{filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id))) ? "Clear visible" : "Select visible"}</Button>
         <Button size="sm" onClick={openPlanning}>Plan selected / all</Button>
         <Button size="sm" variant="outline" onClick={() => { setTaskChoice("new"); setSelectedTaskId(undefined); setTaskName("ControlMap to LMX Roadmap"); setSourceType("action_items"); setDestination("initiatives"); setSyncAllItems(selectedIds.size === 0); setScheduleEnabled(false); setScheduleDrawerOpen(true); }}>Configure sync ({tasks.length})</Button>
+        {selectedIds.size > 0 && <Button size="sm" variant="ghost" onClick={() => { setSelectedIds(new Set()); setSelectionMemory(new Set()); setSyncAllItems(true); }}>Clear selection</Button>}
         <span className="text-xs text-muted-foreground">{filteredActionItems.length} shown · {selectedIds.size} selected</span>
       </div>
       <div className="border border-border rounded-lg overflow-hidden">
