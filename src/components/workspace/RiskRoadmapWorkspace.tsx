@@ -862,6 +862,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
   const [taskName, setTaskName] = useState("ControlMap to LMX Roadmap");
   const [sourceType, setSourceType] = useState<RoadmapSyncConfig["sourceType"]>("action_items");
   const [destination, setDestination] = useState<RoadmapSyncConfig["destination"]>("initiatives");
+  const [syncFrequencyHours, setSyncFrequencyHours] = useState<RoadmapSyncConfig["syncFrequencyHours"]>(24);
   const [horizonMonths, setHorizonMonths] = useState<RoadmapSyncConfig["horizonMonths"]>(6);
   const [onRemoved, setOnRemoved] = useState<RoadmapSyncConfig["onRemoved"]>("decline");
   const [syncAllItems, setSyncAllItems] = useState(true);
@@ -899,6 +900,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
       setTaskName("ControlMap to LMX Roadmap");
       setSourceType(scheduleSource);
       setDestination("initiatives");
+      setSyncFrequencyHours(24);
       setHorizonMonths(6);
       setOnRemoved("decline");
       setSyncAllItems(scheduleSelection.length === 0);
@@ -922,6 +924,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
         setTaskName(current.name);
         setSourceType(current.config.sourceType || "action_items");
         setDestination(current.config.destination || "initiatives");
+        setSyncFrequencyHours(current.config.syncFrequencyHours || 24);
         setHorizonMonths(current.config.horizonMonths || 6);
         setOnRemoved(current.config.onRemoved || "decline");
         setSyncAllItems(current.config.syncAll ?? !(current.config.selectedSourceIds || []).length);
@@ -930,6 +933,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
       } else {
         setSelectedTaskId(undefined);
         setTaskChoice("new");
+        setSyncFrequencyHours(24);
         setSyncAllItems(true);
         setScheduleEnabled(false);
         setSelectedIds(new Set());
@@ -946,6 +950,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
     clientName: client.name,
     sourceType,
     destination,
+    syncFrequencyHours,
     onRemoved,
     skipStatuses: ["Not Applicable"],
     horizonMonths,
@@ -961,6 +966,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
       setTaskName("ControlMap to LMX Roadmap");
       setSourceType(scheduleSource);
       setDestination("initiatives");
+      setSyncFrequencyHours(24);
       setHorizonMonths(6);
       setOnRemoved("decline");
       setSyncAllItems(preservedSelection.size === 0);
@@ -975,6 +981,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
     setTaskName(task.name);
     setSourceType(task.config.sourceType || "action_items");
     setDestination(task.config.destination || "initiatives");
+    setSyncFrequencyHours(task.config.syncFrequencyHours || 24);
     setHorizonMonths(task.config.horizonMonths || 6);
     setOnRemoved(task.config.onRemoved || "decline");
     setSyncAllItems(task.config.syncAll ?? !(task.config.selectedSourceIds || []).length);
@@ -1103,6 +1110,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
           <FieldLabel label="Task name"><Input value={taskName} onChange={(event) => setTaskName(event.target.value)} className="bg-[#111520]" /></FieldLabel>
           <FieldLabel label="Source"><Select value={sourceType} onValueChange={(value) => setSourceType(value as RoadmapSyncConfig["sourceType"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="action_items">ControlMap Action Items</SelectItem><SelectItem value="risks">ControlMap Risk Registry</SelectItem></SelectContent></Select></FieldLabel>
           <FieldLabel label="Lifecycle Manager destination"><Select value={destination} onValueChange={(value) => setDestination(value as RoadmapSyncConfig["destination"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="initiatives">Initiatives / Roadmap</SelectItem><SelectItem value="action_items">Action Items</SelectItem></SelectContent></Select></FieldLabel>
+          <FieldLabel label="Sync frequency"><Select value={String(syncFrequencyHours)} onValueChange={(value) => setSyncFrequencyHours(Number(value) as RoadmapSyncConfig["syncFrequencyHours"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="1">Every hour</SelectItem><SelectItem value="3">Every 3 hours</SelectItem><SelectItem value="6">Every 6 hours</SelectItem><SelectItem value="12">Every 12 hours</SelectItem><SelectItem value="24">Every 24 hours</SelectItem></SelectContent></Select></FieldLabel>
           <FieldLabel label="No-date roadmap horizon"><Select value={String(horizonMonths)} onValueChange={(value) => setHorizonMonths(Number(value) as RoadmapSyncConfig["horizonMonths"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="3">3 months</SelectItem><SelectItem value="6">6 months</SelectItem><SelectItem value="12">12 months</SelectItem></SelectContent></Select></FieldLabel>
           <FieldLabel label="Removed or skipped source item"><Select value={onRemoved} onValueChange={(value) => setOnRemoved(value as RoadmapSyncConfig["onRemoved"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="decline">Decline initiative</SelectItem><SelectItem value="ignore">Leave initiative unchanged</SelectItem></SelectContent></Select></FieldLabel>
         </div>
@@ -1125,7 +1133,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
           <Button disabled={busy} onClick={() => run("live")}>Run live sync</Button>
           {selectedTaskId && <Button variant="ghost" disabled={busy} onClick={() => save(!scheduleEnabled)}>{scheduleEnabled ? "Disable schedule" : "Enable schedule"}</Button>}
         </div>
-        {tasks[0]?.last_run_at && <p className="text-[11px] text-muted-foreground">Last run: {new Date(tasks[0].last_run_at).toLocaleString()} · {tasks[0].last_run_status || "unknown"}</p>}
+        {selectedTaskId && tasks.find((task) => task.id === selectedTaskId)?.last_run_at && <p className="text-[11px] text-muted-foreground">Last run: {new Date(tasks.find((task) => task.id === selectedTaskId)!.last_run_at!).toLocaleString()} · {tasks.find((task) => task.id === selectedTaskId)?.last_run_status || "unknown"}</p>}
           </div>
         </SheetContent>
       </Sheet>

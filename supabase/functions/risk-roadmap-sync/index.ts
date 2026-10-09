@@ -13,6 +13,7 @@ type Config = {
   clientName?: string;
   sourceType: "action_items" | "risks";
   destination?: "initiatives" | "action_items";
+  syncFrequencyHours?: 1 | 3 | 6 | 12 | 24;
   onRemoved?: "decline" | "ignore";
   skipStatuses?: string[];
   horizonMonths?: 3 | 6 | 12;
@@ -20,7 +21,7 @@ type Config = {
   selectedSourceIds?: string[];
 };
 
-type TaskRow = { id: string; owner_hash: string; name: string; config: Config; schedule_enabled: boolean };
+type TaskRow = { id: string; owner_hash: string; name: string; config: Config; schedule_enabled: boolean; last_run_at: string | null };
 type SourceItem = Record<string, unknown> & { id: string };
 
 const json = (body: unknown, status = 200) =>
@@ -245,6 +246,9 @@ Deno.serve(async (req) => {
       if (error) throw error;
       const results = [];
       for (const task of (tasks || []) as TaskRow[]) {
+        const intervalHours = Number(task.config?.syncFrequencyHours || 24);
+        const lastRunAt = task.last_run_at ? new Date(task.last_run_at).getTime() : 0;
+        if (lastRunAt && Date.now() - lastRunAt < intervalHours * 60 * 60 * 1000) continue;
         const { data: saved } = await db.from("saved_api_keys").select("api_key").eq("key_hash", task.owner_hash).maybeSingle();
         if (!saved?.api_key) continue;
         try { results.push(await runTask(db, task, saved.api_key, "live", "scheduled")); } catch (error) { results.push({ task_id: task.id, status: "failed", error: error instanceof Error ? error.message : String(error) }); }
