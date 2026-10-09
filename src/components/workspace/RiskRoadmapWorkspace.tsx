@@ -848,7 +848,7 @@ function WorkspaceScreen({
       )}
     </div>
       </TabsContent>
-      <TabsContent value="actionItems" forceMount>
+      <TabsContent value="actionItems" forceMount className="hidden data-[state=active]:block">
         <ActionItemsView client={client} actionItems={clientActionItems} onPlanActionItems={onPlanActionItems} scheduleRequest={scheduleRequest} scheduleSource={scheduleSource} scheduleSelection={scheduleSelection} onTaskCountChange={onTaskCountChange} />
       </TabsContent>
     </Tabs>
