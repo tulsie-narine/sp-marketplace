@@ -87,6 +87,30 @@ function RiskBadge({ level }: { level: string }) {
   );
 }
 
+function ActionStatusBadge({ status }: { status: string }) {
+  const value = status || "Unknown";
+  const tone = value.toLowerCase().replace(/\s+/g, "-");
+  const colors: Record<string, string> = {
+    completed: "bg-[#22c55e]/10 text-[#22c55e] border-[#22c55e]/20",
+    "in-progress": "bg-[#4f6ef7]/10 text-[#7d93ff] border-[#4f6ef7]/20",
+    review: "bg-[#f59e0b]/10 text-[#fbbf24] border-[#f59e0b]/20",
+    "not-started": "bg-muted text-muted-foreground border-border",
+  };
+  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${colors[tone] || "bg-muted text-muted-foreground border-border"}`}>{value}</span>;
+}
+
+function ActionPriorityBadge({ priority }: { priority: string }) {
+  const value = priority || "Unassigned";
+  const tone = value.toLowerCase();
+  const colors: Record<string, string> = {
+    critical: "bg-[#ef4444]/12 text-[#f87171] border-[#ef4444]/25",
+    high: "bg-[#f59e0b]/12 text-[#fbbf24] border-[#f59e0b]/25",
+    medium: "bg-[#4f6ef7]/12 text-[#93a8ff] border-[#4f6ef7]/25",
+    low: "bg-[#22c55e]/10 text-[#4ade80] border-[#22c55e]/20",
+  };
+  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${colors[tone] || "bg-muted text-muted-foreground border-border"}`}>{value}</span>;
+}
+
 function TrendIcon({ value }: { value: number }) {
   if (value > 0) return <span className="flex items-center gap-0.5 text-[#22c55e] text-xs"><TrendingUp className="w-3 h-3" />+{value}</span>;
   if (value < 0) return <span className="flex items-center gap-0.5 text-[#ef4444] text-xs"><TrendingDown className="w-3 h-3" />{value}</span>;
@@ -660,12 +684,6 @@ function WorkspaceScreen({
   };
 
   return (
-    <Tabs value={workspaceTab} onValueChange={(value) => setWorkspaceTab(value as "risks" | "actionItems")}>
-      <TabsList className="bg-[#111520]">
-        <TabsTrigger value="risks">Risk Registry</TabsTrigger>
-        <TabsTrigger value="actionItems">Action Items</TabsTrigger>
-      </TabsList>
-      <TabsContent value="risks">
     <div className="space-y-4">
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" onClick={onBack}>
@@ -677,7 +695,13 @@ function WorkspaceScreen({
           <span className="text-xs text-muted-foreground font-mono">Score: {client.overall_risk_score}</span>
         </div>
       </div>
-
+      <Tabs value={workspaceTab} onValueChange={(value) => setWorkspaceTab(value as "risks" | "actionItems")}>
+      <TabsList className="bg-[#111520]">
+        <TabsTrigger value="risks">Risk Registry</TabsTrigger>
+        <TabsTrigger value="actionItems">Action Items</TabsTrigger>
+      </TabsList>
+      <TabsContent value="risks">
+    <div className="space-y-4">
       <div className="flex flex-wrap gap-2 items-center">
         <FilterSelect label="Status" value={statusFilter} options={statuses} onChange={onStatusFilter} />
         <FilterSelect label="Treatment" value={treatmentFilter} options={treatments} onChange={onTreatmentFilter} />
@@ -856,6 +880,7 @@ function WorkspaceScreen({
         <ActionItemsView client={client} actionItems={clientActionItems} onPlanActionItems={onPlanActionItems} scheduleRequest={scheduleRequest} scheduleSource={scheduleSource} scheduleSelection={scheduleSelection} onTaskCountChange={onTaskCountChange} />
       </TabsContent>
     </Tabs>
+    </div>
   );
 }
 
@@ -1072,9 +1097,9 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
 
   return (
     <div className="space-y-4">
-      <div>
-        <h3 className="font-heading font-bold text-base">Action Items</h3>
-        <p className="text-xs text-muted-foreground mt-1">ControlMap action items for {client.name}, with optional Lifecycle Manager reconciliation.</p>
+      <div className="flex items-start justify-between gap-4">
+        <div><h3 className="font-heading font-bold text-base">Action Items</h3><p className="text-xs text-muted-foreground mt-1">ControlMap action items for {client.name}, with optional Lifecycle Manager reconciliation.</p></div>
+        <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">{actionItems.length} total</span>
       </div>
       <div className="flex flex-wrap gap-2 items-center">
         <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search action items" className="bg-[#111520] w-full sm:w-64" />
@@ -1093,9 +1118,9 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
       )}
       <div className="border border-border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
-          <thead><tr className="border-b border-border bg-[#111520]"><th className="px-3 py-2 w-8"><input type="checkbox" aria-label="Select visible action items" checked={filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id)))} onChange={selectVisible} /></th><th className="text-left px-3 py-2">ID</th><th className="text-left px-3 py-2">Weakness</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Priority</th></tr></thead>
+          <thead><tr className="border-b border-border bg-[#111520] text-xs uppercase tracking-wide text-muted-foreground"><th className="px-3 py-2 w-8"><input type="checkbox" aria-label="Select visible action items" checked={filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id)))} onChange={selectVisible} /></th><th className="text-left px-3 py-2">ID</th><th className="text-left px-3 py-2">Action item</th><th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Priority</th></tr></thead>
           <tbody>
-            {actionSlice.map((item) => <tr key={item.id} className="border-b border-border"><td className="px-3 py-2"><input type="checkbox" aria-label={`Select action item ${item.id}`} checked={selectedIds.has(String(item.id))} onChange={() => toggleSelected(String(item.id))} /></td><td className="px-3 py-2 font-mono text-xs text-muted-foreground">{item.id}</td><td className="px-3 py-2">{item.weakness_name}</td><td className="px-3 py-2 text-xs">{item.status}</td><td className="px-3 py-2 text-xs">{item.priority}</td></tr>)}
+            {actionSlice.map((item) => <tr key={item.id} className="border-b border-border transition-colors hover:bg-[#181d2e]"><td className="px-3 py-2"><input type="checkbox" aria-label={`Select action item ${item.id}`} checked={selectedIds.has(String(item.id))} onChange={() => toggleSelected(String(item.id))} /></td><td className="px-3 py-2 font-mono text-xs text-muted-foreground">{item.id}</td><td className="px-3 py-2 font-medium">{item.weakness_name}</td><td className="px-3 py-2"><ActionStatusBadge status={item.status} /></td><td className="px-3 py-2"><ActionPriorityBadge priority={item.priority} /></td></tr>)}
             {filteredActionItems.length === 0 && <tr><td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">No action items match these filters.</td></tr>}
           </tbody>
         </table>
