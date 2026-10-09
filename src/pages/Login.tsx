@@ -91,7 +91,7 @@ export default function Login() {
                     className="w-full h-10 px-3 bg-surface-raised border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                   />
                   <p className="text-[11px] text-muted-foreground mt-1.5">
-                    Your key is stored in session only and never sent to our servers.
+                    Your key is used for ScalePad requests. It is saved securely only if you enable scheduled sync.
                   </p>
                 </div>
                 <button
