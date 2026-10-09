@@ -823,6 +823,7 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
   const [sourceType, setSourceType] = useState<RoadmapSyncConfig["sourceType"]>("action_items");
   const [horizonMonths, setHorizonMonths] = useState<RoadmapSyncConfig["horizonMonths"]>(6);
   const [onRemoved, setOnRemoved] = useState<RoadmapSyncConfig["onRemoved"]>("decline");
+  const [syncAllItems, setSyncAllItems] = useState(true);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
@@ -856,11 +857,13 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
         setSourceType(current.config.sourceType || "action_items");
         setHorizonMonths(current.config.horizonMonths || 6);
         setOnRemoved(current.config.onRemoved || "decline");
+        setSyncAllItems(current.config.syncAll ?? !(current.config.selectedSourceIds || []).length);
         setScheduleEnabled(current.schedule_enabled);
         setSelectedIds(new Set(current.config.selectedSourceIds || []));
       } else {
         setSelectedTaskId(undefined);
         setTaskChoice("new");
+        setSyncAllItems(true);
         setScheduleEnabled(false);
         setSelectedIds(new Set());
       }
@@ -878,6 +881,7 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
     onRemoved,
     skipStatuses: ["Not Applicable"],
     horizonMonths,
+    syncAll: syncAllItems,
     selectedSourceIds: Array.from(selectedIds),
   };
 
@@ -889,6 +893,7 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
       setSourceType("action_items");
       setHorizonMonths(6);
       setOnRemoved("decline");
+      setSyncAllItems(true);
       setScheduleEnabled(false);
       setSelectedIds(new Set());
       return;
@@ -900,22 +905,29 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
     setSourceType(task.config.sourceType || "action_items");
     setHorizonMonths(task.config.horizonMonths || 6);
     setOnRemoved(task.config.onRemoved || "decline");
+    setSyncAllItems(task.config.syncAll ?? !(task.config.selectedSourceIds || []).length);
     setScheduleEnabled(task.schedule_enabled);
     setSelectedIds(new Set(task.config.selectedSourceIds || []));
   };
 
-  const toggleSelected = (id: string) => setSelectedIds((current) => {
-    const next = new Set(current);
-    next.has(id) ? next.delete(id) : next.add(id);
-    return next;
-  });
+  const toggleSelected = (id: string) => {
+    setSyncAllItems(false);
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
 
-  const selectVisible = () => setSelectedIds((current) => {
-    const next = new Set(current);
-    const allSelected = filteredActionItems.length > 0 && filteredActionItems.every((item) => next.has(String(item.id)));
-    filteredActionItems.forEach((item) => allSelected ? next.delete(String(item.id)) : next.add(String(item.id)));
-    return next;
-  });
+  const selectVisible = () => {
+    setSyncAllItems(false);
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      const allSelected = filteredActionItems.length > 0 && filteredActionItems.every((item) => next.has(String(item.id)));
+      filteredActionItems.forEach((item) => allSelected ? next.delete(String(item.id)) : next.add(String(item.id)));
+      return next;
+    });
+  };
 
   const save = async (enabled = scheduleEnabled) => {
     setBusy(true);
@@ -986,7 +998,13 @@ function ActionItemsView({ client, actionItems }: { client: PortfolioClient; act
           <FieldLabel label="No-date roadmap horizon"><Select value={String(horizonMonths)} onValueChange={(value) => setHorizonMonths(Number(value) as RoadmapSyncConfig["horizonMonths"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="3">3 months</SelectItem><SelectItem value="6">6 months</SelectItem><SelectItem value="12">12 months</SelectItem></SelectContent></Select></FieldLabel>
           <FieldLabel label="Removed or skipped source item"><Select value={onRemoved} onValueChange={(value) => setOnRemoved(value as RoadmapSyncConfig["onRemoved"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="decline">Decline initiative</SelectItem><SelectItem value="ignore">Leave initiative unchanged</SelectItem></SelectContent></Select></FieldLabel>
         </div>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /> Enable scheduled sync</label>
+        <div className="space-y-2 rounded-md border border-border bg-[#111520] p-3">
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" checked={syncAllItems} onChange={(event) => { setSyncAllItems(event.target.checked); if (event.target.checked) setSelectedIds(new Set()); }} />
+            <span><span className="font-medium">Sync all current {sourceType === "risks" ? "risk-registry items" : "action items"}</span><span className="block text-xs text-muted-foreground mt-0.5">Each scheduled run picks up new records and updates existing roadmap items using their ControlMap source ID.</span></span>
+          </label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /> Enable scheduled sync</label>
+        </div>
         {message && <p className="text-xs text-muted-foreground border border-border rounded-md p-2">{message}</p>}
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" disabled={busy} onClick={() => save(false)}>Save task</Button>

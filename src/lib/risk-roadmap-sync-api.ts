@@ -10,6 +10,7 @@ export type RoadmapSyncConfig = {
   onRemoved: "decline" | "ignore";
   skipStatuses: string[];
   horizonMonths: 3 | 6 | 12;
+  syncAll: boolean;
   selectedSourceIds: string[];
 };
 

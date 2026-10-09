@@ -15,6 +15,7 @@ type Config = {
   onRemoved?: "decline" | "ignore";
   skipStatuses?: string[];
   horizonMonths?: 3 | 6 | 12;
+  syncAll?: boolean;
   selectedSourceIds?: string[];
 };
 
@@ -147,8 +148,9 @@ async function runTask(db: ReturnType<typeof createClient>, task: TaskRow, apiKe
       ? `/controlmap/v1/clients/${encodeURIComponent(config.clientId)}/risks`
       : `/controlmap/v1/clients/${encodeURIComponent(config.clientId)}/action-items/search`;
     const fetchedSource = await fetchAll(apiKey, endpoint, config.sourceType === "risks" ? "GET" : "POST");
+    const syncAll = config.syncAll ?? !(config.selectedSourceIds || []).length;
     const selectedIds = new Set((config.selectedSourceIds || []).map(text));
-    const source = selectedIds.size ? fetchedSource.filter((item) => selectedIds.has(text(item.id))) : fetchedSource;
+    const source = syncAll ? fetchedSource : fetchedSource.filter((item) => selectedIds.has(text(item.id)));
     const initiatives = await fetchAll(apiKey, `/lifecycle-manager/v2/initiatives?filter[client.id]=eq:${encodeURIComponent(config.clientId)}&include_unscheduled=true`);
     const byCode = new Map(initiatives.map((item) => [text(item.name).split(" · ")[0], item]));
     const { data: stateRows, error: stateError } = await db.from("roadmap_sync_items").select("*").eq("task_id", task.id).eq("client_id", config.clientId).eq("source_type", config.sourceType);
@@ -190,7 +192,7 @@ async function runTask(db: ReturnType<typeof createClient>, task: TaskRow, apiKe
       const key = `${row.source_type}:${row.source_id}`;
       // Removing an item from a task is a scope change, not a source deletion.
       // Leave its existing initiative alone until the user explicitly chooses a removal policy.
-      if (row.retired || seen.has(key) || selectedIds.size) continue;
+      if (row.retired || seen.has(key) || !syncAll) continue;
       summary.declined++;
       if (mode === "live" && row.initiative_id && task.config.onRemoved !== "ignore") {
         try { await spCall(apiKey, `/lifecycle-manager/v1/initiatives/${row.initiative_id}/status`, "PUT", { status: "Declined" }); } catch { summary.errors++; }
