@@ -694,9 +694,8 @@ function WorkspaceScreen({
       </div>
 
       {selectedIds.size >= 2 && (
-        <div className="bg-primary/10 border border-primary/20 rounded-lg px-4 py-2 flex items-center justify-between">
+        <div className="bg-primary/10 border border-primary/20 rounded-lg px-4 py-2">
           <span className="text-sm">{selectedIds.size} risks selected</span>
-          <Button size="sm" onClick={onBulkBundle}>Bundle into Initiative {"->"}</Button>
         </div>
       )}
 
