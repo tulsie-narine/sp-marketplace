@@ -873,6 +873,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
   const [priorityFilter, setPriorityFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectionMemory, setSelectionMemory] = useState<Set<string>>(new Set());
   const [actionPage, setActionPage] = useState(0);
   const [scheduleDrawerOpen, setScheduleDrawerOpen] = useState(false);
 
@@ -903,6 +904,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
       setSyncAllItems(scheduleSelection.length === 0);
       setScheduleEnabled(false);
       setSelectedIds(new Set(scheduleSelection));
+      setSelectionMemory(new Set(scheduleSelection));
       setScheduleDrawerOpen(true);
     }
   }, [scheduleRequest, scheduleSource, scheduleSelection]);
@@ -954,19 +956,21 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
   const selectTask = (id: string) => {
     setTaskChoice(id);
     if (id === "new") {
+      const preservedSelection = selectionMemory.size > 0 ? selectionMemory : selectedIds;
       setSelectedTaskId(undefined);
       setTaskName("ControlMap to LMX Roadmap");
       setSourceType(scheduleSource);
       setDestination("initiatives");
       setHorizonMonths(6);
       setOnRemoved("decline");
-      setSyncAllItems(true);
+      setSyncAllItems(preservedSelection.size === 0);
       setScheduleEnabled(false);
-      setSelectedIds(new Set());
+      setSelectedIds(new Set(preservedSelection));
       return;
     }
     const task = tasks.find((candidate) => candidate.id === id);
     if (!task) return;
+    setSelectionMemory(new Set(selectedIds));
     setSelectedTaskId(task.id);
     setTaskName(task.name);
     setSourceType(task.config.sourceType || "action_items");
