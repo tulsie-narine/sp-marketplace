@@ -596,6 +596,7 @@ function WorkspaceScreen({
   const [expandedRiskIds, setExpandedRiskIds] = useState<Set<number>>(new Set());
   const [workspaceTab, setWorkspaceTab] = useState<"risks" | "actionItems">("risks");
   const [scheduleRequest, setScheduleRequest] = useState(0);
+  const [scheduleSource, setScheduleSource] = useState<RoadmapSyncConfig["sourceType"]>("action_items");
 
   if (loading) {
     return (
@@ -676,7 +677,7 @@ function WorkspaceScreen({
           { value: "oldest", label: "Oldest" },
         ]} onChange={onSortBy} />
         <Button size="sm" onClick={onBulkBundle}>Plan selected / all</Button>
-        <Button size="sm" variant="outline" onClick={() => { setScheduleRequest((request) => request + 1); setWorkspaceTab("actionItems"); }}>Configure schedule</Button>
+        <Button size="sm" variant="outline" onClick={() => { setScheduleSource("risks"); setScheduleRequest((request) => request + 1); }}>Configure schedule</Button>
         <div className="ml-auto flex gap-1">
           <Button size="sm" variant={viewMode === "table" ? "default" : "ghost"} onClick={() => onViewMode("table")}>Table</Button>
           <Button size="sm" variant={viewMode === "heatmap" ? "default" : "ghost"} onClick={() => onViewMode("heatmap")}>Heatmap</Button>
@@ -839,14 +840,14 @@ function WorkspaceScreen({
       )}
     </div>
       </TabsContent>
-      <TabsContent value="actionItems">
-        <ActionItemsView client={client} actionItems={clientActionItems} onPlanActionItems={onPlanActionItems} scheduleRequest={scheduleRequest} />
+      <TabsContent value="actionItems" forceMount>
+        <ActionItemsView client={client} actionItems={clientActionItems} onPlanActionItems={onPlanActionItems} scheduleRequest={scheduleRequest} scheduleSource={scheduleSource} />
       </TabsContent>
     </Tabs>
   );
 }
 
-function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleRequest }: { client: PortfolioClient; actionItems: ActionItem[]; onPlanActionItems: (items: ActionItem[]) => void; scheduleRequest: number }) {
+function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleRequest, scheduleSource }: { client: PortfolioClient; actionItems: ActionItem[]; onPlanActionItems: (items: ActionItem[]) => void; scheduleRequest: number; scheduleSource: RoadmapSyncConfig["sourceType"] }) {
   const [tasks, setTasks] = useState<Array<{ id: string; name: string; config: RoadmapSyncConfig; schedule_enabled: boolean; last_run_at: string | null; last_run_status: string | null; last_run_summary: Record<string, unknown> | null }>>([]);
   const [taskChoice, setTaskChoice] = useState("new");
   const [taskName, setTaskName] = useState("ControlMap to LMX Roadmap");
@@ -882,8 +883,11 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
     setActionPage((page) => Math.min(page, Math.max(0, actionPages - 1)));
   }, [actionPages]);
   useEffect(() => {
-    if (scheduleRequest > 0) setScheduleDrawerOpen(true);
-  }, [scheduleRequest]);
+    if (scheduleRequest > 0) {
+      setSourceType(scheduleSource);
+      setScheduleDrawerOpen(true);
+    }
+  }, [scheduleRequest, scheduleSource]);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -1029,7 +1033,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
         <FilterSelect label="Priority" value={priorityFilter} options={priorities} onChange={setPriorityFilter} />
         <Button size="sm" variant="outline" onClick={selectVisible}>{filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id))) ? "Clear visible" : "Select visible"}</Button>
         <Button size="sm" onClick={openPlanning}>Plan selected / all</Button>
-        <Button size="sm" variant="outline" onClick={() => setScheduleDrawerOpen(true)}>Configure schedule</Button>
+        <Button size="sm" variant="outline" onClick={() => { setSourceType("action_items"); setScheduleDrawerOpen(true); }}>Configure schedule</Button>
         <span className="text-xs text-muted-foreground">{filteredActionItems.length} shown · {selectedIds.size} selected</span>
       </div>
       <div className="border border-border rounded-lg overflow-hidden">
