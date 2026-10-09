@@ -1,5 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
-import { listTasks, saveTask, setTaskSchedule, type ScheduledTask } from "@/lib/user-vault-api";
+import { deleteTask, listTasks, saveTask, setTaskSchedule, type ScheduledTask } from "@/lib/user-vault-api";
 
 export const RISK_ROADMAP_APP_ID = "risk-roadmap";
 
@@ -25,6 +25,7 @@ export const saveRoadmapSyncTask = (input: {
 }) => saveTask({ ...input, appId: RISK_ROADMAP_APP_ID });
 
 export const setRoadmapSyncSchedule = (id: string, enabled: boolean) => setTaskSchedule(id, enabled);
+export const deleteRoadmapSyncTask = (id: string) => deleteTask(id);
 
 export async function runRoadmapSync(taskId: string, mode: "dry-run" | "live") {
   const apiKey = sessionStorage.getItem("sp_api_key") || "";

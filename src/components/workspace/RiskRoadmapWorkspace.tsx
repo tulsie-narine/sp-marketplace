@@ -58,6 +58,7 @@ import {
   listRoadmapSyncTasks,
   runRoadmapSync,
   saveRoadmapSyncTask,
+  deleteRoadmapSyncTask,
   setRoadmapSyncSchedule,
   type RoadmapSyncConfig,
 } from "@/lib/risk-roadmap-sync-api";
@@ -141,6 +142,7 @@ export function RiskRoadmapWorkspace() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerRisks, setDrawerRisks] = useState<ClientRisk[]>([]);
   const [drawerTab, setDrawerTab] = useState<"actionItem" | "initiative">("actionItem");
+  const [scheduleTaskCount, setScheduleTaskCount] = useState(0);
 
   // Pagination
   const [portfolioPage, setPortfolioPage] = useState(0);
@@ -392,6 +394,8 @@ export function RiskRoadmapWorkspace() {
               onPlanRisk={(r) => openDrawerForRisks([r])}
               onBulkBundle={openBulkBundle}
               onPlanActionItems={openDrawerForActionItems}
+              onTaskCountChange={setScheduleTaskCount}
+              scheduleTaskCount={scheduleTaskCount}
               page={riskPage}
               totalPages={riskPages}
               onPageChange={setRiskPage}
@@ -579,6 +583,8 @@ interface WorkspaceScreenProps {
   onPlanRisk: (r: ClientRisk) => void;
   onBulkBundle: () => void;
   onPlanActionItems: (items: ActionItem[]) => void;
+  onTaskCountChange: (count: number) => void;
+  scheduleTaskCount: number;
   page: number;
   totalPages: number;
   onPageChange: (p: number) => void;
@@ -592,6 +598,8 @@ function WorkspaceScreen({
   viewMode, onViewMode, selectedIds, onToggleSelect, onPlanRisk,
   onBulkBundle, page, totalPages, onPageChange, heatmapData,
   onPlanActionItems,
+  onTaskCountChange,
+  scheduleTaskCount,
 }: WorkspaceScreenProps) {
   const [expandedRiskIds, setExpandedRiskIds] = useState<Set<number>>(new Set());
   const [workspaceTab, setWorkspaceTab] = useState<"risks" | "actionItems">("risks");
@@ -677,7 +685,7 @@ function WorkspaceScreen({
           { value: "oldest", label: "Oldest" },
         ]} onChange={onSortBy} />
         <Button size="sm" onClick={onBulkBundle}>Plan selected / all</Button>
-        <Button size="sm" variant="outline" onClick={() => { setScheduleSource("risks"); setScheduleRequest((request) => request + 1); }}>Configure schedule</Button>
+        <Button size="sm" variant="outline" onClick={() => { setScheduleSource("risks"); setScheduleRequest((request) => request + 1); }}>Configure schedule ({scheduleTaskCount})</Button>
         <div className="ml-auto flex gap-1">
           <Button size="sm" variant={viewMode === "table" ? "default" : "ghost"} onClick={() => onViewMode("table")}>Table</Button>
           <Button size="sm" variant={viewMode === "heatmap" ? "default" : "ghost"} onClick={() => onViewMode("heatmap")}>Heatmap</Button>
@@ -841,13 +849,13 @@ function WorkspaceScreen({
     </div>
       </TabsContent>
       <TabsContent value="actionItems" forceMount>
-        <ActionItemsView client={client} actionItems={clientActionItems} onPlanActionItems={onPlanActionItems} scheduleRequest={scheduleRequest} scheduleSource={scheduleSource} />
+        <ActionItemsView client={client} actionItems={clientActionItems} onPlanActionItems={onPlanActionItems} scheduleRequest={scheduleRequest} scheduleSource={scheduleSource} onTaskCountChange={onTaskCountChange} />
       </TabsContent>
     </Tabs>
   );
 }
 
-function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleRequest, scheduleSource }: { client: PortfolioClient; actionItems: ActionItem[]; onPlanActionItems: (items: ActionItem[]) => void; scheduleRequest: number; scheduleSource: RoadmapSyncConfig["sourceType"] }) {
+function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleRequest, scheduleSource, onTaskCountChange }: { client: PortfolioClient; actionItems: ActionItem[]; onPlanActionItems: (items: ActionItem[]) => void; scheduleRequest: number; scheduleSource: RoadmapSyncConfig["sourceType"]; onTaskCountChange: (count: number) => void }) {
   const [tasks, setTasks] = useState<Array<{ id: string; name: string; config: RoadmapSyncConfig; schedule_enabled: boolean; last_run_at: string | null; last_run_status: string | null; last_run_summary: Record<string, unknown> | null }>>([]);
   const [taskChoice, setTaskChoice] = useState("new");
   const [taskName, setTaskName] = useState("ControlMap to LMX Roadmap");
@@ -884,7 +892,16 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
   }, [actionPages]);
   useEffect(() => {
     if (scheduleRequest > 0) {
+      setTaskChoice("new");
+      setSelectedTaskId(undefined);
+      setTaskName("ControlMap to LMX Roadmap");
       setSourceType(scheduleSource);
+      setDestination("initiatives");
+      setHorizonMonths(6);
+      setOnRemoved("decline");
+      setSyncAllItems(true);
+      setScheduleEnabled(false);
+      setSelectedIds(new Set());
       setScheduleDrawerOpen(true);
     }
   }, [scheduleRequest, scheduleSource]);
@@ -894,6 +911,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
       const rows = await listRoadmapSyncTasks();
       const matching = rows.filter((task) => task.config?.clientId === client.id);
       setTasks(matching);
+      onTaskCountChange(matching.length);
       const current = matching[0];
       if (current) {
         setSelectedTaskId(current.id);
@@ -916,7 +934,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load sync tasks.");
     }
-  }, [client.id]);
+  }, [client.id, onTaskCountChange]);
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
 
@@ -983,6 +1001,22 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
     onPlanActionItems(selected.length > 0 ? selected : filteredActionItems);
   };
 
+  const deleteSelectedTask = async () => {
+    if (!selectedTaskId || !window.confirm("Delete this saved sync task? This cannot be undone.")) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await deleteRoadmapSyncTask(selectedTaskId);
+      selectTask("new");
+      setMessage("Saved sync task deleted.");
+      await loadTasks();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to delete sync task.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const save = async (enabled = scheduleEnabled) => {
     setBusy(true);
     setMessage(null);
@@ -1033,7 +1067,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
         <FilterSelect label="Priority" value={priorityFilter} options={priorities} onChange={setPriorityFilter} />
         <Button size="sm" variant="outline" onClick={selectVisible}>{filteredActionItems.length > 0 && filteredActionItems.every((item) => selectedIds.has(String(item.id))) ? "Clear visible" : "Select visible"}</Button>
         <Button size="sm" onClick={openPlanning}>Plan selected / all</Button>
-        <Button size="sm" variant="outline" onClick={() => { setSourceType("action_items"); setScheduleDrawerOpen(true); }}>Configure schedule</Button>
+        <Button size="sm" variant="outline" onClick={() => { setTaskChoice("new"); setSelectedTaskId(undefined); setTaskName("ControlMap to LMX Roadmap"); setSourceType("action_items"); setDestination("initiatives"); setScheduleEnabled(false); setScheduleDrawerOpen(true); }}>Configure schedule ({tasks.length})</Button>
         <span className="text-xs text-muted-foreground">{filteredActionItems.length} shown · {selectedIds.size} selected</span>
       </div>
       <div className="border border-border rounded-lg overflow-hidden">
@@ -1059,7 +1093,7 @@ function ActionItemsView({ client, actionItems, onPlanActionItems, scheduleReque
           <SheetHeader><SheetTitle>Roadmap sync schedule</SheetTitle></SheetHeader>
           <div className="border border-border rounded-lg p-4 space-y-3 mt-6">
             <div><h4 className="font-heading font-bold text-sm">Roadmap sync task</h4><p className="text-xs text-muted-foreground mt-1">Schedule all current items or a selected scope. Existing roadmap items are updated instead of duplicated.</p></div>
-        <FieldLabel label="Saved task"><Select value={taskChoice} onValueChange={selectTask}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="new">New sync task</SelectItem>{tasks.map((task) => <SelectItem key={task.id} value={task.id}>{task.name}{task.schedule_enabled ? " · scheduled" : ""}</SelectItem>)}</SelectContent></Select></FieldLabel>
+        <div className="flex items-end gap-2"><FieldLabel label="Saved task"><Select value={taskChoice} onValueChange={selectTask}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="new">New sync task</SelectItem>{tasks.map((task) => <SelectItem key={task.id} value={task.id}>{task.name}{task.schedule_enabled ? " · scheduled" : ""}</SelectItem>)}</SelectContent></Select></FieldLabel>{selectedTaskId && <Button type="button" variant="outline" className="text-destructive hover:text-destructive" disabled={busy} onClick={deleteSelectedTask}>Delete</Button>}</div>
         <div className="grid gap-3 md:grid-cols-2">
           <FieldLabel label="Task name"><Input value={taskName} onChange={(event) => setTaskName(event.target.value)} className="bg-[#111520]" /></FieldLabel>
           <FieldLabel label="Source"><Select value={sourceType} onValueChange={(value) => setSourceType(value as RoadmapSyncConfig["sourceType"])}><SelectTrigger className="bg-[#111520]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="action_items">ControlMap Action Items</SelectItem><SelectItem value="risks">ControlMap Risk Registry</SelectItem></SelectContent></Select></FieldLabel>
