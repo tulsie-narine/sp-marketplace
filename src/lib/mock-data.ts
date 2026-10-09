@@ -105,9 +105,9 @@ export const SEED_APPS: MarketplaceApp[] = [
     id: "app-012",
     name: "ControlMap to LMX Roadmap Builder",
     description:
-      "Review ControlMap risks and action items, then promote selected priorities into Lifecycle Manager initiatives for QBR-ready strategic roadmaps.",
+      "Review ControlMap risks and action items, then sync selected priorities into Lifecycle Manager initiatives or action items for QBR-ready strategic roadmaps.",
     how_it_works:
-      "Fetches client health and risk summary data from the ControlMap API, displays a portfolio-level risk overview with drill-down into individual client risks, and provides a planning drawer to create action items or promote risks to Lifecycle Manager initiatives with full 6-step orchestration.",
+      "Fetches client health, risk registry, and action item data from the ControlMap API, displays a portfolio-level risk overview with drill-down into individual client risks and action items, and provides a planning drawer to create action items or sync selected or scheduled risks and action items into Lifecycle Manager initiatives or action items.",
     category: "Reporting",
     icon: "🎯",
     status: "active",
