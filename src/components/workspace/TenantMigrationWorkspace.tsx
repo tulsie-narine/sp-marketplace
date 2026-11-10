@@ -332,6 +332,9 @@ export function TenantMigrationWorkspace({
     });
   }, [migrationResult, errorClientFilter, errorObjectFilter]);
 
+  const messageOf = (error: unknown) =>
+    error instanceof Error ? error.message : "Failed to load clients";
+
   const loadClients = async () => {
     if (!destinationApiKey) {
       setScreenOneError("Destination tenant is not connected. Please return to the marketplace and reconnect your API key.");
@@ -348,10 +351,25 @@ export function TenantMigrationWorkspace({
     setScreenOneError(null);
 
     try {
-      const [destination, source] = await Promise.all([
+      const [destinationResult, sourceResult] = await Promise.allSettled([
         fetchAllClients(destinationApiKey),
         fetchAllClients(sourceApiKey.trim()),
       ]);
+
+      // Name the tenant that failed. The destination key comes from the login
+      // screen, which never validates it, so a stale one looks exactly like a
+      // bad source key.
+      const failures: string[] = [];
+      if (destinationResult.status === "rejected") {
+        failures.push(`Destination tenant: ${messageOf(destinationResult.reason)}`);
+      }
+      if (sourceResult.status === "rejected") {
+        failures.push(`Source tenant: ${messageOf(sourceResult.reason)}`);
+      }
+      if (failures.length > 0) throw new Error(failures.join(" | "));
+
+      const destination = (destinationResult as PromiseFulfilledResult<MigrationClient[]>).value;
+      const source = (sourceResult as PromiseFulfilledResult<MigrationClient[]>).value;
 
       setDestinationClients(destination);
       setSourceClients(source);
@@ -362,12 +380,12 @@ export function TenantMigrationWorkspace({
         description: `Loaded ${source.length} source clients and ${destination.length} destination clients.`,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to load clients";
-      if (message.includes("403")) {
-        setScreenOneError("Invalid API key or insufficient permissions.");
-      } else {
-        setScreenOneError(message);
-      }
+      const message = messageOf(error);
+      setScreenOneError(
+        message.includes("403")
+          ? `${message} - the key may lack the required permissions.`
+          : message
+      );
     } finally {
       setLoadingClients(false);
       setLoadingMessage("");
