@@ -122,3 +122,20 @@ describe("buildUserResolutionMap", () => {
     expect(map.byEmail).toEqual({ "ana@msp.com": "dst-ana" });
   });
 });
+
+describe("buildAssessmentTemplateCreatePayload with blank text", () => {
+  it("never sends an empty description, which the API rejects with 422", () => {
+    const payload = buildAssessmentTemplateCreatePayload({
+      title: "Security Review",
+      description: "",
+      categories: [{ title: "Identity", description: "", questions: [{ title: "MFA enforced?", description: " ", criteria: [{ label_enum: "AtRisk", description: "" }, { label_enum: "Satisfactory" }] }] }],
+    });
+    const template = payload.assessment_template;
+    const question = template.categories[0].questions[0];
+
+    expect(template.description).toBe("Security Review");
+    expect(template.categories[0]).not.toHaveProperty("description");
+    expect(question.description).toBe("MFA enforced?");
+    expect(question.criteria.map((c) => c.description)).toEqual(["At risk", "Satisfactory"]);
+  });
+});

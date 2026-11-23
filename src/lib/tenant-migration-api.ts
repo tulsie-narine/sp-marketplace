@@ -2004,6 +2004,18 @@ async function fetchAssessmentTemplateDetail(
  * Build the cross-tenant create body. Assessment template IDs are tenant
  * scoped, so copying them would make the destination reject the request.
  */
+const CRITERION_LABEL_TEXT: Record<string, string> = {
+  Satisfactory: "Satisfactory",
+  NeedsAttention: "Needs attention",
+  AtRisk: "At risk",
+  NotApplicable: "Not applicable",
+};
+
+/** The API rejects empty descriptions, so blank text is replaced with a readable fallback. */
+function nonEmptyText(value: unknown, fallback: string) {
+  return asText(value)?.trim() || fallback;
+}
+
 export function buildAssessmentTemplateCreatePayload(
   sourceTemplate: Record<string, any>
 ) {
@@ -2017,9 +2029,10 @@ export function buildAssessmentTemplateCreatePayload(
         ? { scope: sourceTemplate.scope }
         : {}),
       title: asText(sourceTemplate.title) || "Untitled assessment template",
-      ...(sourceTemplate.description !== undefined
-        ? { description: sourceTemplate.description }
-        : {}),
+      description: nonEmptyText(
+        sourceTemplate.description,
+        asText(sourceTemplate.title) || "Untitled assessment template"
+      ),
       ...(sourceTemplate.is_category_weight_evenly_distributed !== undefined
         ? {
             is_category_weight_evenly_distributed:
@@ -2028,7 +2041,7 @@ export function buildAssessmentTemplateCreatePayload(
         : {}),
       categories: categories.map((category: Record<string, any>) => ({
         title: asText(category.title) || "Untitled category",
-        ...(category.description !== undefined
+        ...(asText(category.description)?.trim()
           ? { description: category.description }
           : {}),
         ...(category.is_question_weight_evenly_distributed !== undefined
@@ -2045,9 +2058,10 @@ export function buildAssessmentTemplateCreatePayload(
           : []
         ).map((question: Record<string, any>) => ({
           title: asText(question.title) || "Untitled question",
-          ...(question.description !== undefined
-            ? { description: question.description }
-            : {}),
+          description: nonEmptyText(
+            question.description,
+            asText(question.title) || "Untitled question"
+          ),
           ...(question.remediation_tips !== undefined
             ? { remediation_tips: question.remediation_tips }
             : {}),
@@ -2070,9 +2084,12 @@ export function buildAssessmentTemplateCreatePayload(
             ...(criterion.label_enum !== undefined
               ? { label_enum: criterion.label_enum }
               : {}),
-            ...(criterion.description !== undefined
-              ? { description: criterion.description }
-              : {}),
+            description: nonEmptyText(
+              criterion.description,
+              CRITERION_LABEL_TEXT[asText(criterion.label_enum) || ""] ||
+                asText(criterion.label_enum) ||
+                "No description"
+            ),
           })),
         })),
       })),
@@ -2084,13 +2101,15 @@ async function provisionMissingAssessmentTemplates(
   sourceApiKey: string,
   destinationApiKey: string,
   sourceTemplates: AssessmentTemplateOverview[],
-  destinationTemplates: AssessmentTemplateOverview[]
+  destinationTemplates: AssessmentTemplateOverview[],
+  failures: MigrationErrorEntry[] = []
 ): Promise<AssessmentTemplateOverview[]> {
   const result = [...destinationTemplates];
 
   for (const sourceTemplate of sourceTemplates) {
     const key = normalizeTemplateTitle(sourceTemplate.title);
     if (!key) continue;
+    try {
 
     const detail = await fetchAssessmentTemplateDetail(
       sourceApiKey,
@@ -2140,6 +2159,18 @@ async function provisionMissingAssessmentTemplates(
       questionCount: sourceQuestionCount,
     };
     result.push(provisioned);
+    } catch (error) {
+      // One bad template must not stop the run; its assessments are skipped later.
+      failures.push({
+        clientName: "Account",
+        objectType: "Assessment templates",
+        recordName: sourceTemplate.title,
+        errorCode: "TEMPLATE_COPY_FAILED",
+        errorDetail: error instanceof Error ? error.message : "Unknown error",
+        endpoint: "/lifecycle-manager/v1/assessment-templates",
+        method: "POST",
+      });
+    }
   }
 
   return result;
@@ -3914,12 +3945,16 @@ export async function runTenantMigration({
 
   if (selectedObjects.assessments || selectedObjects.deliverables) {
     reportStatus("Provisioning missing assessment templates");
+    const templateFailures: MigrationErrorEntry[] = [];
     destinationAssessmentTemplates = await provisionMissingAssessmentTemplates(
       sourceApiKey,
       destinationApiKey,
       sourceAssessmentTemplates,
-      destinationAssessmentTemplates
+      destinationAssessmentTemplates,
+      templateFailures
     );
+    totalFailures += templateFailures.length;
+    allErrors.push(...templateFailures);
   }
 
   const sourceAssessmentTemplateTitlesById = new Map(
