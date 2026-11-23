@@ -4,6 +4,7 @@ import {
   buildAssessmentTemplateCreatePayload,
   buildContractCreatePayload,
   buildTagCreatePayload,
+  buildUserResolutionMap,
 } from "./tenant-migration-api";
 
 describe("buildTagCreatePayload", () => {
@@ -107,5 +108,17 @@ describe("buildContractCreatePayload", () => {
     });
 
     expect(payload.notify_days_before_end_date).toBe(45);
+  });
+});
+
+describe("buildUserResolutionMap", () => {
+  it("maps every source id and email of a matched person to the destination user", () => {
+    const map = buildUserResolutionMap([
+      { key: "ana@msp.com", sourceName: "Ana", sourceEmail: "ana@msp.com", sourceUserIds: ["src-user", "src-member"], destinationUserId: "dst-ana", matchedBy: "email" },
+      { key: "id:src-bob", sourceName: "Bob", sourceEmail: null, sourceUserIds: ["src-bob"], destinationUserId: null, matchedBy: "none" },
+    ]);
+
+    expect(map.byId).toEqual({ "src-user": "dst-ana", "src-member": "dst-ana" });
+    expect(map.byEmail).toEqual({ "ana@msp.com": "dst-ana" });
   });
 });

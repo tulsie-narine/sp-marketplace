@@ -122,6 +122,8 @@ export interface RunMigrationParams {
   sourceClients: MigrationClient[];
   destinationClients: MigrationClient[];
   primaryDestinationUserId?: string | null;
+  /** Reviewed source -> destination user pairing; built automatically when omitted. */
+  userMap?: UserResolutionMap | null;
   onClientProgress: (
     clientIndex: number,
     progress: ClientMigrationProgress
@@ -781,6 +783,140 @@ export async function fetchDestinationUsers(
     .filter((user): user is DestinationUserOption => Boolean(user))
     .filter((user, index, all) => all.findIndex((candidate) => candidate.id === user.id) === index)
     .sort((a, b) => `${a.name} ${a.email || ""}`.localeCompare(`${b.name} ${b.email || ""}`));
+}
+
+export type UserMatchMethod = "email" | "name" | "manual" | "none";
+
+export interface UserMatchRow {
+  /** Stable key for the source person (email when known, otherwise the first id). */
+  key: string;
+  sourceName: string;
+  sourceEmail: string | null;
+  /** Every id the source tenant uses for this person (users + members can differ). */
+  sourceUserIds: string[];
+  destinationUserId: string | null;
+  matchedBy: UserMatchMethod;
+}
+
+export interface UserMatchReport {
+  rows: UserMatchRow[];
+  destinationUsers: DestinationUserOption[];
+}
+
+/** Source user id / email → destination user id. Built from a reviewed UserMatchReport. */
+export interface UserResolutionMap {
+  byId: Record<string, string>;
+  byEmail: Record<string, string>;
+}
+
+function normalizePersonName(value: string | null | undefined) {
+  return (value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Pairs every user in the source tenant with a user in the destination tenant,
+ * by email first and then by an unambiguous full-name match. Run before a
+ * migration so owners, evaluators and assignees carry over instead of falling
+ * back to the default user.
+ */
+export async function buildUserMatchReport(
+  sourceApiKey: string,
+  destinationApiKey: string
+): Promise<UserMatchReport> {
+  const [sourceUsers, sourceMembers, destinationUsers, destinationMembers] =
+    await Promise.all([
+      fetchDestinationUsers(sourceApiKey),
+      fetchDestinationMembers(sourceApiKey).catch(() => [] as DestinationMember[]),
+      fetchDestinationUsers(destinationApiKey),
+      fetchDestinationMembers(destinationApiKey).catch(() => [] as DestinationMember[]),
+    ]);
+
+  // Group source ids by person: users and members can carry different ids for one email.
+  const rowsByKey = new Map<string, UserMatchRow>();
+  const addSource = (id: string, email: string | null, name: string | null) => {
+    const normalizedEmail = email?.trim().toLowerCase() || null;
+    const key = normalizedEmail || `id:${id}`;
+    const existing = rowsByKey.get(key);
+    if (existing) {
+      if (!existing.sourceUserIds.includes(id)) existing.sourceUserIds.push(id);
+      if (name && existing.sourceName === "Unnamed user") existing.sourceName = name;
+      return;
+    }
+    rowsByKey.set(key, {
+      key,
+      sourceName: name || normalizedEmail || "Unnamed user",
+      sourceEmail: normalizedEmail,
+      sourceUserIds: [id],
+      destinationUserId: null,
+      matchedBy: "none",
+    });
+  };
+  for (const user of sourceUsers) addSource(user.id, user.email, user.name);
+  for (const member of sourceMembers) addSource(member.id, member.email, null);
+
+  const destinationByEmail = new Map<string, string>();
+  for (const user of destinationUsers) {
+    if (user.email) destinationByEmail.set(user.email.toLowerCase(), user.id);
+  }
+  // Members can list an email the users endpoint omits; only use it when that id is a user.
+  const destinationUserIds = new Set(destinationUsers.map((user) => user.id));
+  for (const member of destinationMembers) {
+    if (!destinationByEmail.has(member.email) && destinationUserIds.has(member.id)) {
+      destinationByEmail.set(member.email, member.id);
+    }
+  }
+  const destinationByName = new Map<string, string[]>();
+  for (const user of destinationUsers) {
+    const name = normalizePersonName(user.name);
+    if (!name || name === "unnamed user") continue;
+    destinationByName.set(name, [...(destinationByName.get(name) || []), user.id]);
+  }
+
+  const rows = [...rowsByKey.values()].map((row) => {
+    const emailMatch = row.sourceEmail ? destinationByEmail.get(row.sourceEmail) : undefined;
+    if (emailMatch) return { ...row, destinationUserId: emailMatch, matchedBy: "email" as const };
+    const nameMatches = destinationByName.get(normalizePersonName(row.sourceName)) || [];
+    if (nameMatches.length === 1) {
+      return { ...row, destinationUserId: nameMatches[0], matchedBy: "name" as const };
+    }
+    return row;
+  });
+
+  rows.sort((a, b) => {
+    if ((a.destinationUserId === null) !== (b.destinationUserId === null)) {
+      return a.destinationUserId === null ? -1 : 1;
+    }
+    return a.sourceName.localeCompare(b.sourceName);
+  });
+
+  return { rows, destinationUsers };
+}
+
+export function buildUserResolutionMap(rows: UserMatchRow[]): UserResolutionMap {
+  const map: UserResolutionMap = { byId: {}, byEmail: {} };
+  for (const row of rows) {
+    if (!row.destinationUserId) continue;
+    for (const id of row.sourceUserIds) map.byId[id] = row.destinationUserId;
+    if (row.sourceEmail) map.byEmail[row.sourceEmail] = row.destinationUserId;
+  }
+  return map;
+}
+
+function resolveMappedUser(
+  userMap: UserResolutionMap | null,
+  ids: Array<string | null | undefined>,
+  emails: Array<string | null | undefined> = []
+): string | null {
+  if (!userMap) return null;
+  for (const id of ids) {
+    const mapped = id ? userMap.byId[id.trim()] : undefined;
+    if (mapped) return mapped;
+  }
+  for (const email of emails) {
+    const mapped = email ? userMap.byEmail[email.trim().toLowerCase()] : undefined;
+    if (mapped) return mapped;
+  }
+  return null;
 }
 
 function isIsoDateTime(value: unknown): value is string {
@@ -2422,7 +2558,8 @@ async function migrateRecord(
   deliverableClientIdCache: Map<string, string> = new Map(),
   sourceAssessmentTemplateTitlesById: Map<string, string> = new Map(),
   destinationAssessmentTemplateIdsByTitle: Map<string, string> = new Map(),
-  sameTenantClone = false
+  sameTenantClone = false,
+  userMap: UserResolutionMap | null = null
 ): Promise<{
   newId?: string;
   recordName: string;
@@ -2472,6 +2609,40 @@ async function migrateRecord(
       }
     };
 
+    const sourceInitiativeOwnerId =
+      asText(record.assigned_user_id) || asText(record.assigned_user?.id) || null;
+    const sourceInitiativeOwnerEmail = asText(record.assigned_user?.email) || null;
+    if (sourceInitiativeOwnerId || sourceInitiativeOwnerEmail) {
+      const mappedOwnerId = resolveMappedUser(
+        userMap,
+        [sourceInitiativeOwnerId],
+        [sourceInitiativeOwnerEmail]
+      );
+      const ownerId =
+        mappedOwnerId ||
+        (sameTenantClone ? sourceInitiativeOwnerId : null) ||
+        primaryDestinationUserId?.trim() ||
+        null;
+      if (!mappedOwnerId && !sameTenantClone) {
+        warnings.push(
+          buildWarning(
+            destinationClient.name,
+            OBJECT_LABELS.initiatives,
+            recordName,
+            ownerId
+              ? `Owner '${sourceInitiativeOwnerEmail || sourceInitiativeOwnerId}' has no matching destination user - assigned the default user instead.`
+              : `Owner '${sourceInitiativeOwnerEmail || sourceInitiativeOwnerId}' has no matching destination user - left unassigned.`
+          )
+        );
+      }
+      if (ownerId) {
+        await updateInitiativeComponent(
+          "Owner",
+          `/lifecycle-manager/v1/initiatives/${created.id}/assigned-user`,
+          { assigned_user_id: ownerId }
+        );
+      }
+    }
     if (asText(record.status)) {
       await updateInitiativeComponent(
         "Status",
@@ -2637,14 +2808,49 @@ async function migrateRecord(
       throw new Error("Skipped - no assignee available.");
     }
 
-    const assignedUserIdsPayload =
-      sourceAssigneeEmails.length > 0
-        ? sourceAssigneeEmails.map((email) => ({ email }))
-        : fallbackAssigneeUserId
-        ? [{ id: fallbackAssigneeUserId }]
-        : sourceAssigneeIds.length > 0
-        ? sourceAssigneeIds.map((id) => ({ id }))
-        : [];
+    let assignedUserIdsPayload: Array<{ id: string } | { email: string }>;
+    if (userMap) {
+      // Resolve each source assignee through the reviewed user matching.
+      const mappedAssigneeIds = new Set<string>();
+      for (const sourceId of sourceAssigneeIds) {
+        const mapped = resolveMappedUser(userMap, [sourceId], [
+          findMemberEmailById(sourceMembers, sourceId),
+        ]);
+        if (mapped) mappedAssigneeIds.add(mapped);
+      }
+      for (const email of sourceAssigneeEmails) {
+        const mapped = resolveMappedUser(userMap, [], [email]);
+        if (mapped) mappedAssigneeIds.add(mapped);
+      }
+      const hadSourceAssignee =
+        sourceAssigneeIds.length > 0 || sourceAssigneeEmails.length > 0;
+      if (mappedAssigneeIds.size === 0 && sameTenantClone) {
+        sourceAssigneeIds.forEach((id) => mappedAssigneeIds.add(id));
+      }
+      if (mappedAssigneeIds.size === 0 && fallbackAssigneeUserId) {
+        mappedAssigneeIds.add(fallbackAssigneeUserId);
+        if (hadSourceAssignee) {
+          warnings.push(
+            buildWarning(
+              destinationClient.name,
+              OBJECT_LABELS.actionItems,
+              recordName,
+              `Assignee '${sourceAssigneeEmails[0] || sourceAssigneeIds[0]}' has no matching destination user - assigned the default user instead.`
+            )
+          );
+        }
+      }
+      assignedUserIdsPayload = [...mappedAssigneeIds].map((id) => ({ id }));
+    } else {
+      assignedUserIdsPayload =
+        sourceAssigneeEmails.length > 0
+          ? sourceAssigneeEmails.map((email) => ({ email }))
+          : fallbackAssigneeUserId
+          ? [{ id: fallbackAssigneeUserId }]
+          : sourceAssigneeIds.length > 0
+          ? sourceAssigneeIds.map((id) => ({ id }))
+          : [];
+    }
 
     if (assignedUserIdsPayload.length === 0) {
       throw new Error("Skipped - assignees could not be resolved for creation.");
@@ -2706,7 +2912,10 @@ async function migrateRecord(
         recordName,
         resolvedEmail:
           sourceAssigneeEmails[0] || null,
-        resolvedUserId: fallbackAssigneeUserId,
+        resolvedUserId:
+          assignedUserIdsPayload
+            .map((entry) => ("id" in entry ? entry.id : null))
+            .find(Boolean) || fallbackAssigneeUserId,
         sourceUserId: sourceAssigneeIds[0] || null,
         note: "Action Item assignee resolution",
       },
@@ -2780,8 +2989,35 @@ async function migrateRecord(
   if (type === "assessments") {
     const templateId = asText(record.assessment_template_id);
     const preferredEvaluatorEmail = extractAssessmentEvaluatorEmail(record);
-    const sourceEvaluateUserId = asText(record.evaluate_user_id) || null;
-    const evaluatorUserId = primaryDestinationUserId;
+    const sourceEvaluateUserId =
+      asText(record.evaluate_user_id) ||
+      asText(record.evaluate_user?.id) ||
+      asText(record.evaluator?.id) ||
+      null;
+    const mappedEvaluatorUserId = resolveMappedUser(
+      userMap,
+      [sourceEvaluateUserId],
+      [preferredEvaluatorEmail]
+    );
+    const evaluatorUserId =
+      mappedEvaluatorUserId ||
+      (sameTenantClone ? sourceEvaluateUserId : null) ||
+      primaryDestinationUserId;
+    if (
+      !mappedEvaluatorUserId &&
+      !sameTenantClone &&
+      evaluatorUserId &&
+      (sourceEvaluateUserId || preferredEvaluatorEmail)
+    ) {
+      warnings.push(
+        buildWarning(
+          destinationClient.name,
+          OBJECT_LABELS.assessments,
+          recordName,
+          `Evaluator '${preferredEvaluatorEmail || sourceEvaluateUserId}' has no matching destination user - assigned the default user instead.`
+        )
+      );
+    }
 
     if (!templateId) {
       throw new Error(
@@ -3112,6 +3348,11 @@ async function migrateRecord(
     let unresolvedPlatformAttendees = 0;
 
     for (const sourceUserId of sourceUserIds) {
+      const preMappedUserId = resolveMappedUser(userMap, [sourceUserId]);
+      if (preMappedUserId) {
+        matchedUserIds.push(preMappedUserId);
+        continue;
+      }
       const sourceEmail = findMemberEmailById(sourceMembers, sourceUserId);
       if (!sourceEmail) {
         if (sameTenantClone) {
@@ -3545,6 +3786,7 @@ export async function runTenantMigration({
   sourceClients,
   destinationClients,
   primaryDestinationUserId,
+  userMap: providedUserMap,
   onClientProgress,
   onStatus,
 }: RunMigrationParams): Promise<MigrationResult> {
@@ -3621,6 +3863,24 @@ export async function runTenantMigration({
       sourceMembers = await fetchDestinationMembers(sourceApiKey);
     } catch {
       sourceMembers = [];
+    }
+  }
+
+  let userMap: UserResolutionMap | null = providedUserMap || null;
+  if (
+    !userMap &&
+    !sameTenantClone &&
+    (selectedObjects.initiatives ||
+      selectedObjects.assessments ||
+      selectedObjects.actionItems ||
+      selectedObjects.meetings)
+  ) {
+    reportStatus("Matching source users to destination users");
+    try {
+      const report = await buildUserMatchReport(sourceApiKey, destinationApiKey);
+      userMap = buildUserResolutionMap(report.rows);
+    } catch {
+      userMap = null;
     }
   }
 
@@ -3774,7 +4034,8 @@ export async function runTenantMigration({
             destinationDeliverableClientIdCache,
             sourceAssessmentTemplateTitlesById,
             destinationAssessmentTemplateIdsByTitle,
-            sameTenantClone
+            sameTenantClone,
+            userMap
           );
           progress.objects[type].succeeded += 1;
           totalCreated += 1;

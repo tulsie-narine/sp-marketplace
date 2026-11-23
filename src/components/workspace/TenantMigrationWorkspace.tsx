@@ -16,6 +16,8 @@ import { useToast } from "@/hooks/use-toast";
 import {
   autoMatchClientMappings,
   buildInitialClientProgress,
+  buildUserMatchReport,
+  buildUserResolutionMap,
   fetchAllClients,
   fetchDestinationUsers,
   maskApiKey,
@@ -28,6 +30,7 @@ import {
   type MigrationResult,
   type DestinationUserOption,
   type RelationshipLogEntry,
+  type UserMatchRow,
   type SelectedObjects,
 } from "@/lib/tenant-migration-api";
 
@@ -200,6 +203,10 @@ export function TenantMigrationWorkspace({
   const [selectedPrimaryDestinationUserId, setSelectedPrimaryDestinationUserId] = useState("");
   const [loadingDestinationUsers, setLoadingDestinationUsers] = useState(false);
   const [destinationUsersError, setDestinationUsersError] = useState<string | null>(null);
+  const [userMatchRows, setUserMatchRows] = useState<UserMatchRow[] | null>(null);
+  const [userMatchLoading, setUserMatchLoading] = useState(false);
+  const [userMatchError, setUserMatchError] = useState<string | null>(null);
+  const [userMatchUnmatchedOnly, setUserMatchUnmatchedOnly] = useState(true);
   const [migrationProgress, setMigrationProgress] = useState<ClientMigrationProgress[]>([]);
   const [migrationResult, setMigrationResult] = useState<MigrationResult | null>(null);
   const [migrationFatalError, setMigrationFatalError] = useState<string | null>(null);
@@ -253,6 +260,59 @@ export function TenantMigrationWorkspace({
   );
   const requiresPrimaryDestinationUser = selectedObjects.actionItems || selectedObjects.assessments;
   const hasPrimaryDestinationUser = selectedPrimaryDestinationUserId.trim().length > 0;
+  const requiresUserMatching =
+    selectedObjects.initiatives ||
+    selectedObjects.assessments ||
+    selectedObjects.actionItems ||
+    selectedObjects.meetings;
+  const isSameTenantClone = sourceApiKey.trim() === destinationApiKey.trim();
+  const unmatchedUserCount = userMatchRows?.filter((row) => !row.destinationUserId).length ?? 0;
+  const destinationUserNameById = useMemo(
+    () => new Map(destinationUsers.map((user) => [user.id, user])),
+    [destinationUsers]
+  );
+
+  const runUserMatchCheck = async () => {
+    if (!sourceApiKey.trim() || !destinationApiKey) return;
+    setUserMatchLoading(true);
+    setUserMatchError(null);
+    try {
+      const report = await buildUserMatchReport(sourceApiKey.trim(), destinationApiKey);
+      setUserMatchRows(report.rows);
+      if (destinationUsers.length === 0) setDestinationUsers(report.destinationUsers);
+    } catch (error) {
+      setUserMatchError(error instanceof Error ? error.message : "Could not compare users between tenants.");
+    } finally {
+      setUserMatchLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (currentScreen !== 3 || !requiresUserMatching || isSameTenantClone) return;
+    if (userMatchRows || userMatchLoading || userMatchError) return;
+    void runUserMatchCheck();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentScreen, requiresUserMatching, isSameTenantClone]);
+
+  const primaryFallbackLabel = (() => {
+    const primary = destinationUserNameById.get(selectedPrimaryDestinationUserId);
+    return primary ? `No match – use primary user (${primary.name})` : "No match – use primary user";
+  })();
+
+  useEffect(() => {
+    setUserMatchRows(null);
+    setUserMatchError(null);
+  }, [sourceApiKey]);
+
+  const setUserMatchOverride = (key: string, destinationUserId: string) => {
+    setUserMatchRows((rows) =>
+      rows?.map((row) =>
+        row.key === key
+          ? { ...row, destinationUserId: destinationUserId || null, matchedBy: destinationUserId ? "manual" : "none" }
+          : row
+      ) ?? rows
+    );
+  };
 
   useEffect(() => {
     if ((!selectedObjects.assessments && !selectedObjects.actionItems) || !destinationApiKey || destinationUsers.length > 0) return;
@@ -457,6 +517,7 @@ export function TenantMigrationWorkspace({
         sourceClients,
         destinationClients,
         primaryDestinationUserId: requiresPrimaryDestinationUser ? selectedPrimaryDestinationUserId : null,
+        userMap: userMatchRows ? buildUserResolutionMap(userMatchRows) : null,
         onClientProgress: (clientIndex, progress) => {
           setMigrationProgress((prev) => prev.map((item, index) => (index === clientIndex ? progress : item)));
         },
@@ -875,7 +936,7 @@ export function TenantMigrationWorkspace({
             Primary destination user for assessments and action items
           </label>
           <p className="mb-3 text-xs text-muted-foreground">
-            Choose the destination user recorded as the assessment evaluator and used when an action item’s source assignee cannot be matched.
+            Owners, evaluators and assignees are carried over using the user matching below. This user is only used when a source user has no match in the destination tenant.
           </p>
           <select
             aria-label="Primary destination user for assessments and action items"
@@ -896,6 +957,109 @@ export function TenantMigrationWorkspace({
           {destinationUsersError && <p className="mt-2 text-xs text-destructive">{destinationUsersError}</p>}
           {!loadingDestinationUsers && !destinationUsersError && destinationUsers.length === 0 && (
             <p className="mt-2 text-xs text-warning">No destination users were returned by the API.</p>
+          )}
+        </div>
+      )}
+
+      {requiresUserMatching && !isSameTenantClone && (
+        <div className="mt-5 rounded-md border border-border bg-surface-raised p-4">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Owner matching check</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Source users are paired with destination users by email, then by exact name. Unmatched users fall back to the primary destination user. Fix a row by choosing the right destination user.
+              </p>
+            </div>
+            <button
+              onClick={() => void runUserMatchCheck()}
+              disabled={userMatchLoading || !sourceApiKey.trim()}
+              className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-card disabled:opacity-40"
+            >
+              {userMatchLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {userMatchRows ? "Re-check" : "Check users"}
+            </button>
+          </div>
+
+          {userMatchError && <p className="text-xs text-destructive">{userMatchError}</p>}
+          {userMatchLoading && !userMatchRows && (
+            <p className="text-xs text-muted-foreground">Comparing users in both tenants…</p>
+          )}
+
+          {userMatchRows && (
+            <>
+              <div
+                className={classNames(
+                  "mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md px-3 py-2 text-xs",
+                  unmatchedUserCount > 0 ? "border border-warning/30 bg-warning/10 text-warning" : "border border-success/30 bg-success/10 text-success"
+                )}
+              >
+                <span className="inline-flex items-center gap-2">
+                  {unmatchedUserCount > 0 ? <TriangleAlert className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                  {userMatchRows.length - unmatchedUserCount} of {userMatchRows.length} source users matched
+                  {unmatchedUserCount > 0 && ` · ${unmatchedUserCount} will fall back to the primary user`}
+                </span>
+                <label className="inline-flex cursor-pointer items-center gap-2 text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={userMatchUnmatchedOnly}
+                    onChange={(event) => setUserMatchUnmatchedOnly(event.target.checked)}
+                    className="accent-primary"
+                  />
+                  Unmatched only
+                </label>
+              </div>
+              <div className="max-h-72 overflow-auto rounded-md border border-border">
+                <table className="w-full text-left text-xs">
+                  <thead className="sticky top-0 bg-card text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Source user</th>
+                      <th className="px-3 py-2 font-medium">Destination user</th>
+                      <th className="px-3 py-2 font-medium">Matched by</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {userMatchRows
+                      .filter((row) => !userMatchUnmatchedOnly || !row.destinationUserId || row.matchedBy === "manual")
+                      .map((row) => (
+                        <tr key={row.key} className="border-t border-border">
+                          <td className="px-3 py-2 text-foreground">
+                            <div>{row.sourceName}</div>
+                            {row.sourceEmail && <div className="text-muted-foreground">{row.sourceEmail}</div>}
+                          </td>
+                          <td className="px-3 py-2">
+                            <select
+                              aria-label={`Destination user for ${row.sourceName}`}
+                              value={row.destinationUserId || ""}
+                              onChange={(event) => setUserMatchOverride(row.key, event.target.value)}
+                              className="h-8 w-full rounded-md border border-border bg-card px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                            >
+                              <option value="">{primaryFallbackLabel}</option>
+                              {destinationUsers.map((user) => (
+                                <option key={user.id} value={user.id}>
+                                  {user.name}{user.email ? ` · ${user.email}` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span
+                              className={classNames(
+                                "rounded-full px-2 py-0.5",
+                                row.matchedBy === "email" && "bg-success/10 text-success",
+                                row.matchedBy === "name" && "bg-warning/15 text-warning",
+                                row.matchedBy === "manual" && "bg-primary/15 text-primary",
+                                row.matchedBy === "none" && "bg-destructive/10 text-destructive"
+                              )}
+                            >
+                              {row.matchedBy === "email" ? "Email" : row.matchedBy === "name" ? "Name – verify" : row.matchedBy === "manual" ? "Manual" : "Not found"}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       )}
