@@ -141,4 +141,24 @@ export const SEED_APPS: MarketplaceApp[] = [
     },
     created_at: "2026-04-10T10:00:00Z",
   },
+  {
+    id: "app-014",
+    name: "PSA Role Sync",
+    description:
+      "Keep ScalePad CS client account teams in step with your PSA. Maps ConnectWise company team roles to account roles and assigns matching team members on a monthly schedule.",
+    how_it_works:
+      "Connects to ConnectWise with an API member key, reads each linked client's company team, matches members to ScalePad users by email (with manual overrides), and assigns them to the client's account team with the mapped role. Unmatched members and unmapped roles are skipped and reported, so every run completes. The sync only adds assignments and never writes to ConnectWise.",
+    category: "Utilities",
+    icon: "🔁",
+    status: "beta",
+    version: "0.1.0",
+    author: "ScalePad Team",
+    api_endpoint: "/app/v1/clients/account-team",
+    input_schema: {
+      realApi: true,
+      appType: "psa-role-sync",
+      fields: [],
+    },
+    created_at: "2026-11-24T10:00:00Z",
+  },
 ];

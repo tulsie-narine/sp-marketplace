@@ -1,0 +1,983 @@
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Loader2,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  RefreshCw,
+  Play,
+  Plug,
+  Save,
+  Trash2,
+  X,
+} from "lucide-react";
+import {
+  CW_SITES,
+  SKIP_REASON_LABELS,
+  deletePsaConnection,
+  discoverPsa,
+  emptyPsaRoleSyncConfig,
+  getPsaConnection,
+  listPsaRoleSyncRuns,
+  listPsaRoleSyncTasks,
+  runPsaRoleSync,
+  savePsaConnection,
+  savePsaRoleSyncTask,
+  type DiscoveredMember,
+  type Discovery,
+  type PsaConnection,
+  type PsaRoleSyncConfig,
+  type RunDetails,
+  type RunRecord,
+} from "@/lib/psa-role-sync-api";
+
+// --- Constants ---
+
+const PAGE_SIZE = 8;
+const TASK_NAME = "ConnectWise role sync";
+const INTERVALS: { value: PsaRoleSyncConfig["syncIntervalDays"]; label: string }[] = [
+  { value: 30, label: "Monthly (every 30 days)" },
+  { value: 14, label: "Every 14 days" },
+  { value: 7, label: "Weekly" },
+];
+const MEMBER_FILTERS = [
+  { value: "all", label: "All members" },
+  { value: "matched", label: "Matched" },
+  { value: "unmatched", label: "No ScalePad user" },
+  { value: "inactive", label: "Inactive" },
+];
+const ACTION_LABELS: Record<string, string> = { assign: "Assign", "set-role": "Set role", "change-role": "Change role" };
+const STATUS_COLORS: Record<string, string> = {
+  success: "bg-success/15 text-success",
+  partial: "bg-warning/15 text-warning",
+  failed: "bg-destructive/15 text-destructive",
+  running: "bg-primary/15 text-primary",
+};
+
+const inputClass =
+  "w-full h-8 px-3 bg-surface-raised border border-border rounded-md text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary";
+const selectClass = "h-7 px-2 bg-surface-raised border border-border rounded text-[11px] text-foreground focus:outline-none";
+
+// --- Sub-components ---
+
+function Badge({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${className}`}>{children}</span>;
+}
+
+function Pagination({ page, totalPages, onPageChange }: { page: number; totalPages: number; onPageChange: (p: number) => void }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-between px-3 py-2 border-t border-border">
+      <button
+        onClick={() => onPageChange(page - 1)}
+        disabled={page <= 1}
+        className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1"
+      >
+        <ChevronLeft className="w-3 h-3" /> Prev
+      </button>
+      <span className="text-[10px] text-muted-foreground">Page {page} of {totalPages}</span>
+      <button
+        onClick={() => onPageChange(page + 1)}
+        disabled={page >= totalPages}
+        className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1"
+      >
+        Next <ChevronRight className="w-3 h-3" />
+      </button>
+    </div>
+  );
+}
+
+function usePaged<T>(items: T[], resetKey: unknown) {
+  const [page, setPage] = useState(1);
+  useEffect(() => setPage(1), [resetKey]);
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  return { page: safePage, totalPages, setPage, rows: items.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE) };
+}
+
+function TabBar<T extends string>({ tabs, active, onChange }: { tabs: [T, string][]; active: T; onChange: (t: T) => void }) {
+  return (
+    <div className="flex border-b border-border">
+      {tabs.map(([key, label]) => (
+        <button
+          key={key}
+          onClick={() => onChange(key)}
+          className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
+            active === key ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <label className="block space-y-1">
+      <span className="text-[11px] font-medium text-foreground">{label}</span>
+      {children}
+      {hint && <span className="block text-[10px] text-muted-foreground">{hint}</span>}
+    </label>
+  );
+}
+
+function StatCard({ label, value, tone = "text-foreground" }: { label: string; value: number; tone?: string }) {
+  return (
+    <div className="bg-surface-raised border border-border rounded-md px-3 py-2">
+      <p className={`text-lg font-heading font-bold ${tone}`}>{value}</p>
+      <p className="text-[10px] text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+function EmptyRow({ children }: { children: React.ReactNode }) {
+  return <p className="text-xs text-muted-foreground text-center py-8 px-4">{children}</p>;
+}
+
+// --- Results ---
+
+type ResultView = { mode: "dry-run" | "live"; status: string; startedAt: string; summary: Record<string, number>; details: Partial<RunDetails>; error?: string | null };
+
+function RunResults({ result }: { result: ResultView }) {
+  const [tab, setTab] = useState<"actions" | "skips" | "notInPsa" | "errors">("actions");
+  const actions = result.details.actions || [];
+  const skips = result.details.skips || [];
+  const notInPsa = result.details.notInPsa || [];
+  const errors = result.details.errors || [];
+  const s = result.summary || {};
+  const skipped = skips.filter((x) => x.reason !== "duplicate-role").length;
+
+  const actionsPaged = usePaged(actions, tab);
+  const skipsPaged = usePaged(skips, tab);
+  const notInPsaPaged = usePaged(notInPsa, tab);
+  const errorsPaged = usePaged(errors, tab);
+
+  return (
+    <div className="border border-border rounded-md overflow-hidden">
+      <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-foreground">{result.mode === "live" ? "Live run" : "Dry run"}</span>
+          <Badge className={STATUS_COLORS[result.status] || "bg-muted text-muted-foreground"}>{result.status}</Badge>
+        </div>
+        <span className="text-[10px] text-muted-foreground">{new Date(result.startedAt).toLocaleString()}</span>
+      </div>
+      {result.error && (
+        <div className="px-4 py-2 border-b border-border text-[11px] text-destructive flex items-start gap-1.5">
+          <XCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {result.error}
+        </div>
+      )}
+      <div className="grid grid-cols-4 gap-2 p-3 border-b border-border">
+        <StatCard
+          label={result.mode === "live" ? "Assigned" : "To assign"}
+          value={result.mode === "live" ? s.applied || 0 : s.planned || 0}
+          tone="text-success"
+        />
+        <StatCard label="Already correct" value={s.unchanged || 0} />
+        <StatCard label="Skipped" value={skipped} tone={skipped ? "text-warning" : "text-foreground"} />
+        <StatCard label="Errors" value={s.errors || 0} tone={s.errors ? "text-destructive" : "text-foreground"} />
+      </div>
+      <TabBar<typeof tab>
+        tabs={[
+          ["actions", `${result.mode === "live" ? "Changes" : "Planned"} (${actions.length})`],
+          ["skips", `Skipped (${skips.length})`],
+          ["notInPsa", `In ScalePad only (${notInPsa.length})`],
+          ["errors", `Errors (${errors.length})`],
+        ]}
+        active={tab}
+        onChange={setTab}
+      />
+      <div className="min-h-[200px]">
+        {tab === "actions" && (
+          <>
+            {actionsPaged.rows.length === 0 ? (
+              <EmptyRow>Nothing to change. Every mapped PSA team member is already assigned.</EmptyRow>
+            ) : (
+              actionsPaged.rows.map((a, i) => (
+                <div key={`${a.clientName}-${a.userLabel}-${i}`} className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border">
+                  <div className="min-w-0">
+                    <p className="text-xs text-foreground truncate">{a.userLabel}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{a.clientName}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Badge className="bg-primary/15 text-primary">{a.roleLabel}</Badge>
+                    <Badge className={a.failed ? "bg-destructive/15 text-destructive" : "bg-muted text-muted-foreground"}>
+                      {a.failed ? "Failed" : ACTION_LABELS[a.kind] || a.kind}
+                    </Badge>
+                  </div>
+                </div>
+              ))
+            )}
+            <Pagination page={actionsPaged.page} totalPages={actionsPaged.totalPages} onPageChange={actionsPaged.setPage} />
+          </>
+        )}
+        {tab === "skips" && (
+          <>
+            {skipsPaged.rows.length === 0 ? (
+              <EmptyRow>Nothing was skipped.</EmptyRow>
+            ) : (
+              skipsPaged.rows.map((x, i) => (
+                <div key={`${x.clientName}-${x.memberLabel}-${i}`} className="px-4 py-2 border-b border-border">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-foreground truncate">{x.memberLabel}</p>
+                    <Badge className="bg-warning/15 text-warning">{SKIP_REASON_LABELS[x.reason] || x.reason}</Badge>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground truncate">{x.clientName} · {x.detail}</p>
+                </div>
+              ))
+            )}
+            <Pagination page={skipsPaged.page} totalPages={skipsPaged.totalPages} onPageChange={skipsPaged.setPage} />
+          </>
+        )}
+        {tab === "notInPsa" && (
+          <>
+            <p className="px-4 py-2 text-[10px] text-muted-foreground border-b border-border">
+              Assigned in ScalePad but not on the client's PSA team. The sync never removes these; review them by hand.
+            </p>
+            {notInPsaPaged.rows.length === 0 ? (
+              <EmptyRow>No differences.</EmptyRow>
+            ) : (
+              notInPsaPaged.rows.map((x, i) => (
+                <div key={`${x.clientName}-${x.userLabel}-${i}`} className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border">
+                  <div className="min-w-0">
+                    <p className="text-xs text-foreground truncate">{x.userLabel}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{x.clientName}</p>
+                  </div>
+                  <Badge className="bg-muted text-muted-foreground">{x.roleLabel}</Badge>
+                </div>
+              ))
+            )}
+            <Pagination page={notInPsaPaged.page} totalPages={notInPsaPaged.totalPages} onPageChange={notInPsaPaged.setPage} />
+          </>
+        )}
+        {tab === "errors" && (
+          <>
+            {errorsPaged.rows.length === 0 ? (
+              <EmptyRow>No errors.</EmptyRow>
+            ) : (
+              errorsPaged.rows.map((e, i) => (
+                <p key={i} className="px-4 py-2 border-b border-border text-[11px] text-destructive break-words">{e}</p>
+              ))
+            )}
+            <Pagination page={errorsPaged.page} totalPages={errorsPaged.totalPages} onPageChange={errorsPaged.setPage} />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --- Main Component ---
+
+export function PsaRoleSyncWorkspace() {
+  // Data
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [connection, setConnection] = useState<PsaConnection | null>(null);
+  const [discovery, setDiscovery] = useState<Discovery | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
+
+  // Saved task
+  const [taskId, setTaskId] = useState<string | undefined>();
+  const [config, setConfig] = useState<PsaRoleSyncConfig>(emptyPsaRoleSyncConfig());
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Left panel
+  const [leftTab, setLeftTab] = useState<"roles" | "members">("roles");
+  const [roleSearch, setRoleSearch] = useState("");
+  const [memberSearch, setMemberSearch] = useState("");
+  const [memberFilter, setMemberFilter] = useState("all");
+  const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
+
+  // Right panel
+  const [rightTab, setRightTab] = useState<"connection" | "run" | "history">("connection");
+  const [connForm, setConnForm] = useState({ site: CW_SITES[0].value, customSite: "", companyId: "", publicKey: "", privateKey: "", clientId: "" });
+  const [connSaving, setConnSaving] = useState(false);
+  const [running, setRunning] = useState<"dry-run" | "live" | null>(null);
+  const [confirmLive, setConfirmLive] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [result, setResult] = useState<ResultView | null>(null);
+  const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+
+  const updateConfig = (patch: Partial<PsaRoleSyncConfig>) => {
+    setConfig((c) => ({ ...c, ...patch }));
+    setDirty(true);
+  };
+
+  const runDiscovery = useCallback(async (overrides: Record<string, string>) => {
+    setDiscovering(true);
+    setDiscoverError(null);
+    try {
+      setDiscovery(await discoverPsa(overrides));
+    } catch (err) {
+      setDiscoverError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDiscovering(false);
+    }
+  }, []);
+
+  // Initial load: connection + saved settings, then discovery when connected.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [conn, tasks] = await Promise.all([getPsaConnection(), listPsaRoleSyncTasks()]);
+        if (cancelled) return;
+        const task = tasks[0];
+        const loadedConfig = { ...emptyPsaRoleSyncConfig(), ...(task?.config || {}) };
+        if (task) {
+          setTaskId(task.id);
+          setConfig(loadedConfig);
+          setScheduleEnabled(task.schedule_enabled);
+        }
+        setConnection(conn.connection);
+        if (conn.connection) {
+          const known = CW_SITES.some((s) => s.value === conn.connection!.site);
+          setConnForm({
+            site: known ? conn.connection.site : "custom",
+            customSite: known ? "" : conn.connection.site,
+            companyId: conn.connection.company_id,
+            publicKey: conn.connection.public_key,
+            privateKey: "",
+            clientId: conn.connection.client_id,
+          });
+          setRightTab(task ? "run" : "connection");
+          runDiscovery(loadedConfig.emailOverrides);
+        }
+      } catch (err) {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [runDiscovery]);
+
+  const loadRuns = useCallback(async () => {
+    if (!taskId) return;
+    setRunsLoading(true);
+    try {
+      setRuns(await listPsaRoleSyncRuns(taskId));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunsLoading(false);
+    }
+  }, [taskId]);
+
+  useEffect(() => {
+    if (rightTab === "history") loadRuns();
+  }, [rightTab, loadRuns]);
+
+  // --- Derived lists ---
+
+  const filteredRoles = useMemo(() => {
+    const q = roleSearch.trim().toLowerCase();
+    return (discovery?.psaRoles || []).filter((r) => !q || r.name.toLowerCase().includes(q));
+  }, [discovery, roleSearch]);
+  const rolesPaged = usePaged(filteredRoles, roleSearch);
+  const mappedCount = Object.values(config.roleMap).filter(Boolean).length;
+
+  const filteredMembers = useMemo(() => {
+    const q = memberSearch.trim().toLowerCase();
+    return (discovery?.members || []).filter(
+      (m) =>
+        (memberFilter === "all" || m.status === memberFilter) &&
+        (!q || [m.name, m.identifier, m.email].some((v) => (v || "").toLowerCase().includes(q))),
+    );
+  }, [discovery, memberSearch, memberFilter]);
+  const membersPaged = usePaged(filteredMembers, `${memberSearch}|${memberFilter}`);
+  const memberCounts = useMemo(() => {
+    const counts = { matched: 0, unmatched: 0, inactive: 0 };
+    for (const m of discovery?.members || []) counts[m.status]++;
+    return counts;
+  }, [discovery]);
+
+  // --- Role mapping ---
+
+  const setRoleMapping = (psaRoleId: string, csRoleId: string) => {
+    // Keep roleMap in PSA list order: that order is the priority when a member holds two mapped roles.
+    const next: Record<string, string> = {};
+    for (const role of discovery?.psaRoles || []) {
+      const value = role.id === psaRoleId ? csRoleId : config.roleMap[role.id];
+      if (value) next[role.id] = value;
+    }
+    updateConfig({ roleMap: next });
+  };
+
+  // --- Overrides ---
+
+  const overrideKey = (m: DiscoveredMember) => (m.email || m.identifier).toLowerCase();
+
+  const addOverride = (m: DiscoveredMember) => {
+    const target = (overrideDrafts[m.id] || "").trim();
+    if (!target) return;
+    const next = { ...config.emailOverrides, [overrideKey(m)]: target };
+    updateConfig({ emailOverrides: next });
+    setOverrideDrafts((d) => ({ ...d, [m.id]: "" }));
+    runDiscovery(next);
+  };
+
+  const removeOverride = (m: DiscoveredMember) => {
+    const next = { ...config.emailOverrides };
+    delete next[overrideKey(m)];
+    delete next[m.identifier.toLowerCase()];
+    updateConfig({ emailOverrides: next });
+    runDiscovery(next);
+  };
+
+  // --- Save settings ---
+
+  const saveSettings = async (enabled = scheduleEnabled) => {
+    setSaving(true);
+    try {
+      const saved = await savePsaRoleSyncTask({ id: taskId, name: TASK_NAME, config, scheduleEnabled: enabled });
+      setTaskId(saved.id);
+      setScheduleEnabled(saved.schedule_enabled);
+      setDirty(false);
+      return saved.id;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSave = async () => {
+    try {
+      await saveSettings();
+      toast.success("Sync settings saved");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleScheduleToggle = async (enabled: boolean) => {
+    if (enabled && !mappedCount) {
+      toast.error("Map at least one PSA role before turning on the schedule.");
+      return;
+    }
+    try {
+      await saveSettings(enabled);
+      toast.success(enabled ? "Schedule on. Your ScalePad API key is saved for scheduled runs." : "Schedule off");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // --- Connection ---
+
+  const handleSaveConnection = async () => {
+    const site = connForm.site === "custom" ? connForm.customSite.trim() : connForm.site;
+    if (!site || !connForm.companyId.trim() || !connForm.publicKey.trim() || !connForm.clientId.trim() || (!connection && !connForm.privateKey.trim())) {
+      toast.error("Fill in every field to connect.");
+      return;
+    }
+    setConnSaving(true);
+    try {
+      await savePsaConnection({ site, companyId: connForm.companyId, publicKey: connForm.publicKey, privateKey: connForm.privateKey, clientId: connForm.clientId });
+      const conn = await getPsaConnection();
+      setConnection(conn.connection);
+      setConnForm((f) => ({ ...f, privateKey: "" }));
+      toast.success("Connected to ConnectWise");
+      runDiscovery(config.emailOverrides);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setConnSaving(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setConfirmDisconnect(false);
+    try {
+      await deletePsaConnection();
+      setConnection(null);
+      setDiscovery(null);
+      setScheduleEnabled(false);
+      setConnForm({ site: CW_SITES[0].value, customSite: "", companyId: "", publicKey: "", privateKey: "", clientId: "" });
+      toast.success("ConnectWise disconnected and schedule turned off");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // --- Run ---
+
+  const handleRun = async (mode: "dry-run" | "live") => {
+    setConfirmLive(false);
+    if (!mappedCount) {
+      toast.error("Map at least one PSA role first.");
+      return;
+    }
+    setRunning(mode);
+    setResult(null);
+    try {
+      const id = dirty || !taskId ? await saveSettings() : taskId;
+      const res = await runPsaRoleSync(id, mode);
+      setResult({ mode: res.mode, status: res.status, startedAt: new Date().toISOString(), summary: res.summary, details: res.details });
+      const s = res.summary;
+      if (res.status === "success") {
+        toast.success(mode === "live" ? `Assigned ${s.applied || 0} account role(s)` : `Dry run: ${s.planned || 0} assignment(s) to make`);
+      } else {
+        toast.warning(`Finished with ${s.errors || 0} error(s). See the Errors tab.`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunning(null);
+    }
+  };
+
+  // --- Render ---
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px] gap-2 text-sm text-muted-foreground">
+        <Loader2 className="w-4 h-4 animate-spin" /> Loading PSA Role Sync…
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="bg-card border border-border rounded-lg p-6 text-sm text-destructive flex items-start gap-2">
+        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" /> {loadError}
+      </div>
+    );
+  }
+
+  const leftBody = () => {
+    if (!connection) return <EmptyRow>Connect ConnectWise on the right to load its team roles and members.</EmptyRow>;
+    if (discovering && !discovery) {
+      return (
+        <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading ConnectWise and ScalePad data…
+        </div>
+      );
+    }
+    if (discoverError) {
+      return (
+        <div className="p-4 text-[11px] text-destructive flex items-start gap-1.5">
+          <XCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {discoverError}
+        </div>
+      );
+    }
+    if (!discovery) return null;
+
+    if (leftTab === "roles") {
+      return (
+        <>
+          <div className="flex-1 overflow-y-auto">
+            {rolesPaged.rows.length === 0 ? (
+              <EmptyRow>No ConnectWise team roles found.</EmptyRow>
+            ) : (
+              rolesPaged.rows.map((role) => (
+                <div key={role.id} className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border">
+                  <span className="text-xs font-medium text-foreground truncate">{role.name}</span>
+                  <select
+                    value={config.roleMap[role.id] || ""}
+                    onChange={(e) => setRoleMapping(role.id, e.target.value)}
+                    className={`${selectClass} w-44 ${config.roleMap[role.id] ? "border-primary/60" : ""}`}
+                  >
+                    <option value="">Don't sync</option>
+                    {discovery.csRoles.map((r) => (
+                      <option key={r.id} value={r.id}>{r.label}</option>
+                    ))}
+                  </select>
+                </div>
+              ))
+            )}
+          </div>
+          <Pagination page={rolesPaged.page} totalPages={rolesPaged.totalPages} onPageChange={rolesPaged.setPage} />
+        </>
+      );
+    }
+
+    return (
+      <>
+        <div className="flex-1 overflow-y-auto">
+          {membersPaged.rows.length === 0 ? (
+            <EmptyRow>No members match.</EmptyRow>
+          ) : (
+            membersPaged.rows.map((m) => (
+              <div key={m.id} className="px-4 py-2.5 border-b border-border space-y-1.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-foreground truncate">{m.name || m.identifier}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{m.email || "No email in ConnectWise"}</p>
+                  </div>
+                  {m.status === "matched" ? (
+                    <Badge className="bg-success/15 text-success">{m.via === "override" ? "Matched (override)" : "Matched"}</Badge>
+                  ) : m.status === "inactive" ? (
+                    <Badge className="bg-muted text-muted-foreground">Inactive</Badge>
+                  ) : (
+                    <Badge className="bg-warning/15 text-warning">No ScalePad user</Badge>
+                  )}
+                </div>
+                {m.status === "matched" && m.via === "override" && (
+                  <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                    <span className="truncate">→ {m.csEmail}</span>
+                    <button onClick={() => removeOverride(m)} className="hover:text-destructive flex items-center gap-0.5">
+                      <X className="w-3 h-3" /> Remove
+                    </button>
+                  </div>
+                )}
+                {m.status === "unmatched" && (
+                  <div className="flex gap-1.5">
+                    <input
+                      type="email"
+                      placeholder="ScalePad email for this person"
+                      value={overrideDrafts[m.id] || ""}
+                      onChange={(e) => setOverrideDrafts((d) => ({ ...d, [m.id]: e.target.value }))}
+                      onKeyDown={(e) => e.key === "Enter" && addOverride(m)}
+                      className={`${inputClass} h-7 text-[11px]`}
+                    />
+                    <button
+                      onClick={() => addOverride(m)}
+                      disabled={!(overrideDrafts[m.id] || "").trim()}
+                      className="text-[11px] px-2 rounded-md bg-primary/15 text-primary hover:bg-primary/25 disabled:opacity-40"
+                    >
+                      Match
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+        <Pagination page={membersPaged.page} totalPages={membersPaged.totalPages} onPageChange={membersPaged.setPage} />
+      </>
+    );
+  };
+
+  return (
+    <>
+      <div className="flex gap-4 min-h-[600px]">
+        {/* LEFT PANEL: mapping and member matches */}
+        <div className="w-[40%] flex flex-col bg-card border border-border rounded-lg overflow-hidden">
+          <div className="p-4 border-b border-border space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <h3 className="font-heading font-bold text-sm text-foreground">ConnectWise Roles</h3>
+                {discovery && <Badge className="bg-primary/15 text-primary">{mappedCount} mapped</Badge>}
+              </div>
+              {connection && (
+                <button
+                  onClick={() => runDiscovery(config.emailOverrides)}
+                  disabled={discovering}
+                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 disabled:opacity-40"
+                >
+                  <RefreshCw className={`w-3 h-3 ${discovering ? "animate-spin" : ""}`} /> Refresh
+                </button>
+              )}
+            </div>
+            {discovery && (
+              <>
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                  {leftTab === "roles" ? (
+                    <input type="text" placeholder="Search team roles…" value={roleSearch} onChange={(e) => setRoleSearch(e.target.value)} className={`${inputClass} pl-8`} />
+                  ) : (
+                    <input type="text" placeholder="Search members…" value={memberSearch} onChange={(e) => setMemberSearch(e.target.value)} className={`${inputClass} pl-8`} />
+                  )}
+                </div>
+                {leftTab === "roles" ? (
+                  <p className="text-[10px] text-muted-foreground">
+                    Pick the ScalePad account role for each ConnectWise team role. If someone holds two mapped roles on one company, the role higher in this list wins.
+                  </p>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <select value={memberFilter} onChange={(e) => setMemberFilter(e.target.value)} className={`${selectClass} flex-1`}>
+                      {MEMBER_FILTERS.map((f) => (
+                        <option key={f.value} value={f.value}>{f.label}</option>
+                      ))}
+                    </select>
+                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                      {memberCounts.matched} matched · {memberCounts.unmatched} unmatched
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          {discovery && (
+            <TabBar<typeof leftTab>
+              tabs={[
+                ["roles", `Role Mapping (${discovery.psaRoles.length})`],
+                ["members", `Members (${discovery.members.length})`],
+              ]}
+              active={leftTab}
+              onChange={setLeftTab}
+            />
+          )}
+          {leftBody()}
+        </div>
+
+        {/* RIGHT PANEL: connection, run, history */}
+        <div className="w-[60%] flex flex-col bg-card border border-border rounded-lg overflow-hidden">
+          <div className="p-4 border-b border-border flex items-center justify-between">
+            <div>
+              <h3 className="font-heading font-bold text-sm text-foreground">PSA Role Sync</h3>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {connection
+                  ? `ConnectWise ${connection.company_id} · ${discovery ? `${discovery.clients.linked} of ${discovery.clients.total} clients linked` : "connected"}`
+                  : "Not connected"}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {dirty && <span className="text-[10px] text-warning">Unsaved changes</span>}
+              <button
+                onClick={handleSave}
+                disabled={saving || !connection}
+                className="text-xs text-primary hover:text-primary/80 flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} Save settings
+              </button>
+            </div>
+          </div>
+
+          <TabBar<typeof rightTab>
+            tabs={[
+              ["connection", "Connection"],
+              ["run", "Schedule & Run"],
+              ["history", "History"],
+            ]}
+            active={rightTab}
+            onChange={setRightTab}
+          />
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {rightTab === "connection" && (
+              <>
+                <div className="flex items-center gap-2 text-xs">
+                  {connection ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-success" />
+                      <span className="text-foreground">
+                        Connected{connection.verified_at ? `, verified ${new Date(connection.verified_at).toLocaleString()}` : ""}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Plug className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">Add a ConnectWise API member key to get started.</span>
+                    </>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Site">
+                    <select value={connForm.site} onChange={(e) => setConnForm((f) => ({ ...f, site: e.target.value }))} className={`${selectClass} w-full h-8`}>
+                      {CW_SITES.map((s) => (
+                        <option key={s.value} value={s.value}>{s.label}</option>
+                      ))}
+                      <option value="custom">Other / on-premises</option>
+                    </select>
+                  </Field>
+                  {connForm.site === "custom" ? (
+                    <Field label="Site host" hint="Host name only, for example cw.yourcompany.com">
+                      <input value={connForm.customSite} onChange={(e) => setConnForm((f) => ({ ...f, customSite: e.target.value }))} className={inputClass} />
+                    </Field>
+                  ) : (
+                    <div />
+                  )}
+                  <Field label="Company ID" hint="The company you sign in to ConnectWise with">
+                    <input value={connForm.companyId} onChange={(e) => setConnForm((f) => ({ ...f, companyId: e.target.value }))} className={inputClass} />
+                  </Field>
+                  <Field label="Client ID" hint="From developer.connectwise.com">
+                    <input value={connForm.clientId} onChange={(e) => setConnForm((f) => ({ ...f, clientId: e.target.value }))} className={inputClass} />
+                  </Field>
+                  <Field label="Public key">
+                    <input value={connForm.publicKey} onChange={(e) => setConnForm((f) => ({ ...f, publicKey: e.target.value }))} className={inputClass} />
+                  </Field>
+                  <Field label="Private key" hint={connection ? "Leave blank to keep the saved key" : "Stored encrypted; never shown again"}>
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      placeholder={connection ? "••••••••" : ""}
+                      value={connForm.privateKey}
+                      onChange={(e) => setConnForm((f) => ({ ...f, privateKey: e.target.value }))}
+                      className={inputClass}
+                    />
+                  </Field>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Use an API member with read access to System &gt; Members and Companies &gt; Company Teams and Team Roles. The sync never writes to ConnectWise.
+                </p>
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={handleSaveConnection}
+                    disabled={connSaving}
+                    className="h-8 px-4 rounded-md bg-primary text-primary-foreground text-xs font-medium flex items-center gap-1.5 hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {connSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plug className="w-3.5 h-3.5" />}
+                    {connection ? "Update and test" : "Connect and test"}
+                  </button>
+                  {connection && (
+                    <button onClick={() => setConfirmDisconnect(true)} className="text-xs text-muted-foreground hover:text-destructive flex items-center gap-1">
+                      <Trash2 className="w-3 h-3" /> Disconnect
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+
+            {rightTab === "run" && (
+              <>
+                {!connection ? (
+                  <EmptyRow>Connect ConnectWise first.</EmptyRow>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="How often">
+                        <select
+                          value={config.syncIntervalDays}
+                          onChange={(e) => updateConfig({ syncIntervalDays: Number(e.target.value) as PsaRoleSyncConfig["syncIntervalDays"] })}
+                          className={`${selectClass} w-full h-8`}
+                        >
+                          {INTERVALS.map((i) => (
+                            <option key={i.value} value={i.value}>{i.label}</option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Scheduled sync" hint={scheduleEnabled ? "Runs live automatically" : "Off: runs only when you start them"}>
+                        <div className="h-8 flex items-center">
+                          <Switch checked={scheduleEnabled} onCheckedChange={handleScheduleToggle} disabled={saving} />
+                        </div>
+                      </Field>
+                    </div>
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <Checkbox
+                        checked={config.overwriteRoles}
+                        onCheckedChange={(v) => updateConfig({ overwriteRoles: v === true })}
+                        className="h-3.5 w-3.5 mt-0.5"
+                      />
+                      <span className="text-[11px] text-foreground">
+                        Replace a different role already set in ScalePad
+                        <span className="block text-[10px] text-muted-foreground">
+                          Off: those are skipped and listed as "Different role in ScalePad". The sync never removes anyone either way.
+                        </span>
+                      </span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleRun("dry-run")}
+                        disabled={!!running || !mappedCount}
+                        className="h-8 px-4 rounded-md border border-border text-xs font-medium text-foreground flex items-center gap-1.5 hover:bg-surface-raised disabled:opacity-40"
+                      >
+                        {running === "dry-run" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />} Dry run
+                      </button>
+                      <button
+                        onClick={() => setConfirmLive(true)}
+                        disabled={!!running || !mappedCount}
+                        className="h-8 px-4 rounded-md bg-primary text-primary-foreground text-xs font-medium flex items-center gap-1.5 hover:bg-primary/90 disabled:opacity-40"
+                      >
+                        {running === "live" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />} Run live
+                      </button>
+                      {!mappedCount && <span className="text-[10px] text-muted-foreground">Map at least one role to run.</span>}
+                    </div>
+                    {running && (
+                      <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                        <Loader2 className="w-3 h-3 animate-spin" /> Reading every linked client's ConnectWise team. This can take a minute or two.
+                      </p>
+                    )}
+                    {result && <RunResults result={result} />}
+                  </>
+                )}
+              </>
+            )}
+
+            {rightTab === "history" && (
+              <>
+                {!taskId ? (
+                  <EmptyRow>No runs yet.</EmptyRow>
+                ) : runsLoading ? (
+                  <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading runs…
+                  </div>
+                ) : runs.length === 0 ? (
+                  <EmptyRow>No runs yet.</EmptyRow>
+                ) : (
+                  <div className="border border-border rounded-md overflow-hidden">
+                    {runs.map((r) => (
+                      <button
+                        key={r.id}
+                        onClick={() => {
+                          setResult({ mode: r.mode, status: r.status, startedAt: r.started_at, summary: r.summary, details: r.details || {}, error: r.error_message });
+                          setRightTab("run");
+                        }}
+                        className="w-full flex items-center justify-between gap-2 px-4 py-2.5 border-b border-border last:border-b-0 hover:bg-surface-raised text-left"
+                      >
+                        <div>
+                          <p className="text-xs text-foreground">{new Date(r.started_at).toLocaleString()}</p>
+                          <p className="text-[10px] text-muted-foreground">
+                            {r.trigger_type === "scheduled" ? "Scheduled" : "Manual"} · {r.mode === "live" ? "Live" : "Dry run"}
+                            {r.summary ? ` · ${r.mode === "live" ? r.summary.applied || 0 : r.summary.planned || 0} assignment(s)` : ""}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Badge className={STATUS_COLORS[r.status] || "bg-muted text-muted-foreground"}>{r.status}</Badge>
+                          <ChevronRight className="w-3 h-3 text-muted-foreground" />
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <AlertDialog open={confirmLive} onOpenChange={setConfirmLive}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Run the sync live?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This assigns matched ConnectWise team members to their ScalePad clients with the mapped account roles. It only adds assignments
+              {config.overwriteRoles ? " and replaces different roles" : ""}; nobody is removed. Run a dry run first if you haven't.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => handleRun("live")}>Run live</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmDisconnect} onOpenChange={setConfirmDisconnect}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Disconnect ConnectWise?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The saved ConnectWise keys are deleted and the schedule is turned off. Your role mapping and run history are kept.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDisconnect}>Disconnect</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}

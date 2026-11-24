@@ -4,7 +4,7 @@ The ScalePad App Marketplace is an authenticated React application for discoveri
 
 ## App catalog
 
-The marketplace ships with seven registered apps:
+The marketplace ships with eight registered apps:
 
 | App | Category | What it does |
 | --- | --- | --- |
@@ -15,8 +15,9 @@ The marketplace ships with seven registered apps:
 | **Client Clean Up** | Utilities | Permanently removes selected Lifecycle Manager data for selected clients by object type. |
 | **ControlMap to LMX Workstream Sync** | Reporting | Reviews ControlMap risks and action items, then syncs selected priorities into Lifecycle Manager initiatives or action items. |
 | **LCM Data Reset** | Utilities | Runs a controlled Lifecycle Manager reset workflow based on the tenant migration and cleanup orchestration. |
+| **PSA Role Sync** | Utilities | Maps ConnectWise company team roles to ScalePad CS account roles and assigns matching team members to each client, on a monthly schedule. |
 
-All seven apps are seeded in [`src/lib/mock-data.ts`](src/lib/mock-data.ts). App metadata includes the name, description, category, status, version, API endpoint, and workspace type. New apps can be added from the admin area and are persisted in the browser under the `sp_apps` key.
+All eight apps are seeded in [`src/lib/mock-data.ts`](src/lib/mock-data.ts). App metadata includes the name, description, category, status, version, API endpoint, and workspace type. New apps can be added from the admin area and are persisted in the browser under the `sp_apps` key.
 
 ## Highlights
 
@@ -77,15 +78,37 @@ The login screen supports two access modes:
 
 ## Supabase setup
 
-The repository includes three Edge Functions:
+The repository includes these Edge Functions:
 
 | Function | Purpose |
 | --- | --- |
 | `scalepad-proxy` | Proxies ScalePad requests and attaches the session API key without exposing direct API calls in the browser. |
 | `app-feedback` | Stores ratings and comments and supports admin moderation. |
 | `lcm-data-reset-cron` | Provides the Lifecycle Manager reset runner used by the reset workflow. |
+| `user-vault` | Saves a user's ScalePad key and generic scheduled tasks, scoped to a hash of the key. |
+| `risk-roadmap-sync` | Runs the ControlMap to LMX Workstream Sync, manually or on schedule. |
+| `psa-role-sync` | Stores the encrypted PSA connection and runs PSA Role Sync, manually or on schedule. |
 
 Apply the SQL migrations in `supabase/migrations`, configure the Supabase URL and publishable key, and deploy the functions for a connected environment. Functions that use the Supabase service role require the `SUPABASE_SERVICE_ROLE_KEY` secret to be configured in Supabase; never commit that secret or a ScalePad API key.
+
+### PSA Role Sync setup
+
+`psa-role-sync` needs one extra function secret, `PSA_CREDENTIALS_KEY`: a long random string used to encrypt saved ConnectWise private keys. Set it before anyone connects, and don't change it afterwards, because saved connections can't be decrypted with a new key.
+
+```bash
+supabase secrets set PSA_CREDENTIALS_KEY="$(openssl rand -base64 48)"
+```
+
+Scheduled runs need a daily pg_cron job that calls the function with the service-role key. The SQL is in a comment at the end of `supabase/migrations/20261124000000_psa_role_sync.sql`. The function itself skips tasks whose interval (30 days by default) hasn't passed.
+
+How a run works:
+
+1. Reads ScalePad clients and takes each client's ConnectWise company ID from `record_lineage`.
+2. Reads ConnectWise members, team roles, and the company team of every linked client.
+3. Matches members to ScalePad users by email, or by an override set in the Members tab.
+4. Assigns each matched member to the client's account team with the mapped role (`PUT /app/v1/clients/account-team`).
+
+The sync only adds assignments. Unmatched members, unmapped roles, role conflicts and per-client failures are reported in the run, so they never stop it. The matching and planning logic lives in `supabase/functions/psa-role-sync/plan.ts`, and its tests are in `src/lib/psa-role-sync-plan.test.ts`.
 
 ## Routes
 
