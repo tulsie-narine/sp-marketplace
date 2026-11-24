@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTOTASK_OWNER_ROLE_ID,
   batchActions,
+  buildAutotaskTeamEntries,
   buildPlan,
   isDue,
   psaCompanyIdFromLineage,
@@ -40,6 +42,7 @@ const team = (companyId: string, memberId: string, teamRoleId: string, teamRoleN
 });
 const config = (overrides: Partial<PlanConfig> = {}): PlanConfig => ({
   roleMap: { "10": "r-am", "20": "r-tech" },
+  rolePriority: ["10", "20"],
   emailOverrides: {},
   overwriteRoles: false,
   ...overrides,
@@ -105,6 +108,16 @@ describe("buildPlan", () => {
     expect(result.skips).toEqual([expect.objectContaining({ reason: "duplicate-role" })]);
   });
 
+  it("follows rolePriority, not object key order, when picking between two mapped roles", () => {
+    // Number-like keys always enumerate first in JS, so roleMap order alone would pick "10" here.
+    const result = plan(
+      [team("100", "1", "10", "Account Manager"), team("100", "1", "20", "Technician")],
+      [],
+      config({ rolePriority: ["20", "10"] }),
+    );
+    expect(result.actions).toEqual([expect.objectContaining({ roleId: "r-tech" })]);
+  });
+
   it("skips a mapping that points at a deleted ScalePad role", () => {
     const result = plan([team("100", "1", "10", "Account Manager")], [], config({ roleMap: { "10": "r-gone" } }));
     expect(result.skips).toEqual([expect.objectContaining({ reason: "role-missing-in-scalepad" })]);
@@ -150,6 +163,55 @@ describe("psaCompanyIdFromLineage", () => {
   it("returns null when the client has no PSA lineage", () => {
     expect(psaCompanyIdFromLineage(lineage, /autotask/i)).toBeNull();
     expect(psaCompanyIdFromLineage(null, /connectwise/i)).toBeNull();
+  });
+});
+
+describe("buildAutotaskTeamEntries", () => {
+  const roleNames = new Map([["29682833", "Technician"], ["29682834", "vCIO"]]);
+  const defaults = new Map([["10", "29682833"], ["11", "29682834"]]);
+
+  it("gives the company owner the owner role and team members their default role", () => {
+    const entries = buildAutotaskTeamEntries({
+      companies: [{ id: "100", name: "Contoso", ownerResourceId: "11" }],
+      teamRows: [{ companyId: "100", resourceId: "10" }],
+      defaultRoleByResource: defaults,
+      roleNames,
+    });
+    expect(entries).toEqual([
+      { companyId: "100", companyName: "Contoso", memberId: "11", teamRoleId: AUTOTASK_OWNER_ROLE_ID, teamRoleName: "Account Manager (company owner)" },
+      { companyId: "100", companyName: "Contoso", memberId: "10", teamRoleId: "29682833", teamRoleName: "Technician" },
+    ]);
+  });
+
+  it("leaves a member with no default role unmapped, and ignores companies without an owner or link", () => {
+    const entries = buildAutotaskTeamEntries({
+      companies: [{ id: "100", name: "Contoso", ownerResourceId: null }],
+      teamRows: [{ companyId: "100", resourceId: "99" }, { companyId: "555", resourceId: "10" }],
+      defaultRoleByResource: defaults,
+      roleNames,
+    });
+    expect(entries).toEqual([{ companyId: "100", companyName: "Contoso", memberId: "99", teamRoleId: "", teamRoleName: "No default role" }]);
+  });
+
+  it("plans the owner role first when the owner is also on the Company Team", () => {
+    const atMembers: PsaMember[] = [{ id: "11", identifier: "alex", name: "Alex Smith", email: "alex.smith@msp.example", inactive: false }];
+    const teams = buildAutotaskTeamEntries({
+      companies: [{ id: "100", name: "Contoso", ownerResourceId: "11" }],
+      teamRows: [{ companyId: "100", resourceId: "11" }],
+      defaultRoleByResource: defaults,
+      roleNames,
+    });
+    const result = buildPlan({
+      members: atMembers,
+      teams,
+      users,
+      clients,
+      roles,
+      assignments: [],
+      config: config({ roleMap: { [AUTOTASK_OWNER_ROLE_ID]: "r-am", "29682834": "r-vcio" }, rolePriority: [AUTOTASK_OWNER_ROLE_ID, "29682834"] }),
+    });
+    expect(result.actions).toEqual([expect.objectContaining({ userId: "u-alex", roleId: "r-am" })]);
+    expect(result.skips).toEqual([expect.objectContaining({ reason: "duplicate-role" })]);
   });
 });
 

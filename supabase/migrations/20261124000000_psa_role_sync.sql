@@ -1,20 +1,21 @@
--- PSA Role Sync: maps PSA company team roles (ConnectWise first) to ScalePad CS
+-- PSA Role Sync: maps PSA company team roles (ConnectWise, Autotask) to ScalePad CS
 -- client account team roles. Sync settings live in scheduled_tasks (app_id = 'psa-role-sync').
 -- These tables hold the PSA connection, a ledger of what the sync assigned, and run history.
 
 -- One PSA connection per ScalePad API key (owner_hash) and PSA type.
--- The private key is encrypted by the psa-role-sync edge function (AES-GCM, key in the
--- PSA_CREDENTIALS_KEY function secret) before it is stored. It is never returned to the browser.
+-- settings holds the non-secret connection fields, which differ per PSA:
+--   connectwise: site, companyId, publicKey, clientId
+--   autotask:    username, integrationCode, zoneUrl (looked up from the username)
+-- The secret (ConnectWise private key, Autotask API secret) is encrypted by the psa-role-sync
+-- edge function (AES-GCM, key in the PSA_CREDENTIALS_KEY function secret) before it is stored.
+-- It is never returned to the browser.
 CREATE TABLE IF NOT EXISTS public.psa_connections (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_hash TEXT NOT NULL,
   psa_type TEXT NOT NULL CHECK (psa_type IN ('connectwise', 'autotask', 'halo')),
-  site TEXT NOT NULL,
-  company_id TEXT NOT NULL,
-  public_key TEXT NOT NULL,
-  client_id TEXT NOT NULL,
-  private_key_ciphertext TEXT NOT NULL,
-  private_key_iv TEXT NOT NULL,
+  settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+  secret_ciphertext TEXT NOT NULL,
+  secret_iv TEXT NOT NULL,
   verified_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),

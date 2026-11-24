@@ -26,16 +26,20 @@ import {
   Save,
   Trash2,
   X,
+  ArrowLeftRight,
 } from "lucide-react";
 import {
   CW_SITES,
+  PSA_OPTIONS,
   SKIP_REASON_LABELS,
   deletePsaConnection,
   discoverPsa,
   emptyPsaRoleSyncConfig,
-  getPsaConnection,
+  getPsaConnections,
   listPsaRoleSyncRuns,
   listPsaRoleSyncTasks,
+  psaOption,
+  psaShortName,
   runPsaRoleSync,
   savePsaConnection,
   savePsaRoleSyncTask,
@@ -43,6 +47,7 @@ import {
   type Discovery,
   type PsaConnection,
   type PsaRoleSyncConfig,
+  type PsaType,
   type RunDetails,
   type RunRecord,
 } from "@/lib/psa-role-sync-api";
@@ -50,7 +55,7 @@ import {
 // --- Constants ---
 
 const PAGE_SIZE = 8;
-const TASK_NAME = "ConnectWise role sync";
+const TASK_NAME = "PSA role sync";
 const INTERVALS: { value: PsaRoleSyncConfig["syncIntervalDays"]; label: string }[] = [
   { value: 30, label: "Monthly (every 30 days)" },
   { value: 14, label: "Every 14 days" },
@@ -73,6 +78,21 @@ const STATUS_COLORS: Record<string, string> = {
 const inputClass =
   "w-full h-8 px-3 bg-surface-raised border border-border rounded-md text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary";
 const selectClass = "h-7 px-2 bg-surface-raised border border-border rounded text-[11px] text-foreground focus:outline-none";
+
+/** Form values for the connection fields of one PSA; "customSite" backs ConnectWise's "Other" site. */
+type ConnForm = Record<string, string>;
+
+function connFormFor(psaType: PsaType, connection: PsaConnection | undefined): ConnForm {
+  const form: ConnForm = {};
+  for (const field of psaOption(psaType).fields) form[field.key] = field.secret ? "" : connection?.settings[field.key] || "";
+  if (psaType === "connectwise") {
+    const site = connection?.settings.site || "";
+    const known = !site || CW_SITES.some((s) => s.value === site);
+    form.site = known ? site || CW_SITES[0].value : "custom";
+    form.customSite = known ? "" : site;
+  }
+  return form;
+}
 
 // --- Sub-components ---
 
@@ -152,11 +172,69 @@ function EmptyRow({ children }: { children: React.ReactNode }) {
   return <p className="text-xs text-muted-foreground text-center py-8 px-4">{children}</p>;
 }
 
+// --- PSA picker (first step) ---
+
+function PsaPicker({
+  current,
+  connections,
+  onPick,
+  onCancel,
+}: {
+  current: PsaType | null;
+  connections: PsaConnection[];
+  onPick: (psaType: PsaType) => void;
+  onCancel?: () => void;
+}) {
+  return (
+    <div className="bg-card border border-border rounded-lg p-6">
+      <div className="flex items-start justify-between mb-1">
+        <h3 className="font-heading font-bold text-sm text-foreground">Which PSA do you use?</h3>
+        {onCancel && (
+          <button onClick={onCancel} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
+            <X className="w-3 h-3" /> Cancel
+          </button>
+        )}
+      </div>
+      <p className="text-[11px] text-muted-foreground mb-5">
+        PSA Role Sync reads client teams from your PSA and assigns the same people to each client's account team in ScalePad.
+      </p>
+      <div className="grid grid-cols-3 gap-3">
+        {PSA_OPTIONS.map((option) => {
+          const connected = connections.some((c) => c.psa_type === option.id);
+          const selected = current === option.id;
+          return (
+            <button
+              key={option.id}
+              disabled={!option.available}
+              onClick={() => option.available && onPick(option.id as PsaType)}
+              className={`text-left p-4 rounded-lg border transition-colors ${
+                selected ? "border-primary bg-primary/10" : "border-border bg-surface-raised"
+              } ${option.available ? "hover:border-primary/60" : "opacity-50 cursor-not-allowed"}`}
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-sm font-medium text-foreground">{option.label}</span>
+                {!option.available ? (
+                  <Badge className="bg-muted text-muted-foreground">Coming soon</Badge>
+                ) : selected ? (
+                  <Badge className="bg-primary/15 text-primary">Current</Badge>
+                ) : connected ? (
+                  <Badge className="bg-success/15 text-success">Connected</Badge>
+                ) : null}
+              </div>
+              <p className="text-[11px] text-muted-foreground">{option.blurb}</p>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // --- Results ---
 
 type ResultView = { mode: "dry-run" | "live"; status: string; startedAt: string; summary: Record<string, number>; details: Partial<RunDetails>; error?: string | null };
 
-function RunResults({ result }: { result: ResultView }) {
+function RunResults({ result, psaName }: { result: ResultView; psaName: string }) {
   const [tab, setTab] = useState<"actions" | "skips" | "notInPsa" | "errors">("actions");
   const actions = result.details.actions || [];
   const skips = result.details.skips || [];
@@ -208,7 +286,7 @@ function RunResults({ result }: { result: ResultView }) {
         {tab === "actions" && (
           <>
             {actionsPaged.rows.length === 0 ? (
-              <EmptyRow>Nothing to change. Every mapped PSA team member is already assigned.</EmptyRow>
+              <EmptyRow>Nothing to change. Every mapped {psaName} team member is already assigned.</EmptyRow>
             ) : (
               actionsPaged.rows.map((a, i) => (
                 <div key={`${a.clientName}-${a.userLabel}-${i}`} className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border">
@@ -249,7 +327,7 @@ function RunResults({ result }: { result: ResultView }) {
         {tab === "notInPsa" && (
           <>
             <p className="px-4 py-2 text-[10px] text-muted-foreground border-b border-border">
-              Assigned in ScalePad but not on the client's PSA team. The sync never removes these; review them by hand.
+              Assigned in ScalePad but not on the client's {psaName} team. The sync never removes these; review them by hand.
             </p>
             {notInPsaPaged.rows.length === 0 ? (
               <EmptyRow>No differences.</EmptyRow>
@@ -290,17 +368,22 @@ export function PsaRoleSyncWorkspace() {
   // Data
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [connection, setConnection] = useState<PsaConnection | null>(null);
+  const [connections, setConnections] = useState<PsaConnection[]>([]);
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
 
-  // Saved task
+  // Saved task (one per ScalePad key; config.psaType says which PSA it syncs from)
   const [taskId, setTaskId] = useState<string | undefined>();
   const [config, setConfig] = useState<PsaRoleSyncConfig>(emptyPsaRoleSyncConfig());
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // PSA picker: shown first until a PSA is chosen, and again from "Change PSA"
+  const [psaChosen, setPsaChosen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pendingSwitch, setPendingSwitch] = useState<PsaType | null>(null);
 
   // Left panel
   const [leftTab, setLeftTab] = useState<"roles" | "members">("roles");
@@ -311,7 +394,7 @@ export function PsaRoleSyncWorkspace() {
 
   // Right panel
   const [rightTab, setRightTab] = useState<"connection" | "run" | "history">("connection");
-  const [connForm, setConnForm] = useState({ site: CW_SITES[0].value, customSite: "", companyId: "", publicKey: "", privateKey: "", clientId: "" });
+  const [connForm, setConnForm] = useState<ConnForm>(() => connFormFor("connectwise", undefined));
   const [connSaving, setConnSaving] = useState(false);
   const [running, setRunning] = useState<"dry-run" | "live" | null>(null);
   const [confirmLive, setConfirmLive] = useState(false);
@@ -320,50 +403,49 @@ export function PsaRoleSyncWorkspace() {
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
 
+  const psaType = config.psaType;
+  const psa = psaOption(psaType);
+  const psaName = psaShortName(psaType);
+  const connection = connections.find((c) => c.psa_type === psaType);
+
   const updateConfig = (patch: Partial<PsaRoleSyncConfig>) => {
     setConfig((c) => ({ ...c, ...patch }));
     setDirty(true);
   };
 
-  const runDiscovery = useCallback(async (overrides: Record<string, string>) => {
+  const runDiscovery = useCallback(async (type: PsaType, overrides: Record<string, string>) => {
     setDiscovering(true);
     setDiscoverError(null);
     try {
-      setDiscovery(await discoverPsa(overrides));
+      setDiscovery(await discoverPsa(type, overrides));
     } catch (err) {
+      setDiscovery(null);
       setDiscoverError(err instanceof Error ? err.message : String(err));
     } finally {
       setDiscovering(false);
     }
   }, []);
 
-  // Initial load: connection + saved settings, then discovery when connected.
+  // Initial load: saved connections + settings, then discovery when the chosen PSA is connected.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [conn, tasks] = await Promise.all([getPsaConnection(), listPsaRoleSyncTasks()]);
+        const [conns, tasks] = await Promise.all([getPsaConnections(), listPsaRoleSyncTasks()]);
         if (cancelled) return;
+        setConnections(conns);
         const task = tasks[0];
-        const loadedConfig = { ...emptyPsaRoleSyncConfig(), ...(task?.config || {}) };
-        if (task) {
-          setTaskId(task.id);
-          setConfig(loadedConfig);
-          setScheduleEnabled(task.schedule_enabled);
-        }
-        setConnection(conn.connection);
-        if (conn.connection) {
-          const known = CW_SITES.some((s) => s.value === conn.connection!.site);
-          setConnForm({
-            site: known ? conn.connection.site : "custom",
-            customSite: known ? "" : conn.connection.site,
-            companyId: conn.connection.company_id,
-            publicKey: conn.connection.public_key,
-            privateKey: "",
-            clientId: conn.connection.client_id,
-          });
-          setRightTab(task ? "run" : "connection");
-          runDiscovery(loadedConfig.emailOverrides);
+        if (!task) return; // First visit: the PSA picker shows.
+        const loadedConfig = { ...emptyPsaRoleSyncConfig(), ...(task.config || {}) };
+        setTaskId(task.id);
+        setConfig(loadedConfig);
+        setScheduleEnabled(task.schedule_enabled);
+        setPsaChosen(true);
+        const conn = conns.find((c) => c.psa_type === loadedConfig.psaType);
+        setConnForm(connFormFor(loadedConfig.psaType, conn));
+        if (conn) {
+          setRightTab("run");
+          runDiscovery(loadedConfig.psaType, loadedConfig.emailOverrides);
         }
       } catch (err) {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
@@ -414,16 +496,64 @@ export function PsaRoleSyncWorkspace() {
     return counts;
   }, [discovery]);
 
+  // --- PSA choice ---
+
+  const applyPsa = async (next: PsaType) => {
+    setPendingSwitch(null);
+    setPickerOpen(false);
+    setPsaChosen(true);
+    if (next === psaType && taskId) return;
+    // Mappings and email matches belong to one PSA, so a switch starts them fresh.
+    const nextConfig = { ...emptyPsaRoleSyncConfig(next), syncIntervalDays: config.syncIntervalDays, overwriteRoles: config.overwriteRoles };
+    setConfig(nextConfig);
+    setDiscovery(null);
+    setDiscoverError(null);
+    setResult(null);
+    setRoleSearch("");
+    setMemberSearch("");
+    setOverrideDrafts({});
+    const conn = connections.find((c) => c.psa_type === next);
+    setConnForm(connFormFor(next, conn));
+    setRightTab("connection");
+    if (taskId) {
+      // Save straight away with the schedule off, so a scheduled run never uses the old PSA's mapping.
+      try {
+        const saved = await savePsaRoleSyncTask({ id: taskId, name: TASK_NAME, config: nextConfig, scheduleEnabled: false });
+        setScheduleEnabled(saved.schedule_enabled);
+        setDirty(false);
+      } catch (err) {
+        setDirty(true);
+        toast.error(err instanceof Error ? err.message : String(err));
+      }
+    } else {
+      setDirty(true);
+    }
+    if (conn) {
+      setRightTab("run");
+      runDiscovery(next, nextConfig.emailOverrides);
+    }
+  };
+
+  const handlePick = (next: PsaType) => {
+    const hasWork = mappedCount > 0 || Object.keys(config.emailOverrides).length > 0 || scheduleEnabled;
+    if (psaChosen && next !== psaType && hasWork) setPendingSwitch(next);
+    else applyPsa(next);
+  };
+
   // --- Role mapping ---
 
   const setRoleMapping = (psaRoleId: string, csRoleId: string) => {
-    // Keep roleMap in PSA list order: that order is the priority when a member holds two mapped roles.
+    // rolePriority follows the on-screen order: it decides which role wins when a member holds two.
     const next: Record<string, string> = {};
+    const priority: string[] = [];
     for (const role of discovery?.psaRoles || []) {
       const value = role.id === psaRoleId ? csRoleId : config.roleMap[role.id];
-      if (value) next[role.id] = value;
+      if (value) {
+        next[role.id] = value;
+        priority.push(role.id);
+      }
     }
-    updateConfig({ roleMap: next });
+    updateConfig({ roleMap: next, rolePriority: priority });
   };
 
   // --- Overrides ---
@@ -436,7 +566,7 @@ export function PsaRoleSyncWorkspace() {
     const next = { ...config.emailOverrides, [overrideKey(m)]: target };
     updateConfig({ emailOverrides: next });
     setOverrideDrafts((d) => ({ ...d, [m.id]: "" }));
-    runDiscovery(next);
+    runDiscovery(psaType, next);
   };
 
   const removeOverride = (m: DiscoveredMember) => {
@@ -444,7 +574,7 @@ export function PsaRoleSyncWorkspace() {
     delete next[overrideKey(m)];
     delete next[m.identifier.toLowerCase()];
     updateConfig({ emailOverrides: next });
-    runDiscovery(next);
+    runDiscovery(psaType, next);
   };
 
   // --- Save settings ---
@@ -473,7 +603,7 @@ export function PsaRoleSyncWorkspace() {
 
   const handleScheduleToggle = async (enabled: boolean) => {
     if (enabled && !mappedCount) {
-      toast.error("Map at least one PSA role before turning on the schedule.");
+      toast.error(`Map at least one ${psaName} role before turning on the schedule.`);
       return;
     }
     try {
@@ -487,19 +617,22 @@ export function PsaRoleSyncWorkspace() {
   // --- Connection ---
 
   const handleSaveConnection = async () => {
-    const site = connForm.site === "custom" ? connForm.customSite.trim() : connForm.site;
-    if (!site || !connForm.companyId.trim() || !connForm.publicKey.trim() || !connForm.clientId.trim() || (!connection && !connForm.privateKey.trim())) {
-      toast.error("Fill in every field to connect.");
+    const fields: Record<string, string> = {};
+    for (const field of psa.fields) fields[field.key] = (connForm[field.key] || "").trim();
+    if (psaType === "connectwise" && connForm.site === "custom") fields.site = (connForm.customSite || "").trim();
+    const missing = psa.fields.filter((f) => !fields[f.key] && !(f.secret && connection));
+    if (missing.length) {
+      toast.error(`Fill in ${missing.map((f) => f.label).join(", ")}.`);
       return;
     }
     setConnSaving(true);
     try {
-      await savePsaConnection({ site, companyId: connForm.companyId, publicKey: connForm.publicKey, privateKey: connForm.privateKey, clientId: connForm.clientId });
-      const conn = await getPsaConnection();
-      setConnection(conn.connection);
-      setConnForm((f) => ({ ...f, privateKey: "" }));
-      toast.success("Connected to ConnectWise");
-      runDiscovery(config.emailOverrides);
+      await savePsaConnection(psaType, fields);
+      const conns = await getPsaConnections();
+      setConnections(conns);
+      setConnForm(connFormFor(psaType, conns.find((c) => c.psa_type === psaType)));
+      toast.success(`Connected to ${psaName}`);
+      runDiscovery(psaType, config.emailOverrides);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     } finally {
@@ -510,12 +643,13 @@ export function PsaRoleSyncWorkspace() {
   const handleDisconnect = async () => {
     setConfirmDisconnect(false);
     try {
-      await deletePsaConnection();
-      setConnection(null);
+      await deletePsaConnection(psaType);
+      setConnections((cs) => cs.filter((c) => c.psa_type !== psaType));
       setDiscovery(null);
       setScheduleEnabled(false);
-      setConnForm({ site: CW_SITES[0].value, customSite: "", companyId: "", publicKey: "", privateKey: "", clientId: "" });
-      toast.success("ConnectWise disconnected and schedule turned off");
+      setConnForm(connFormFor(psaType, undefined));
+      setRightTab("connection");
+      toast.success(`${psaName} disconnected and schedule turned off`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     }
@@ -526,7 +660,7 @@ export function PsaRoleSyncWorkspace() {
   const handleRun = async (mode: "dry-run" | "live") => {
     setConfirmLive(false);
     if (!mappedCount) {
-      toast.error("Map at least one PSA role first.");
+      toast.error(`Map at least one ${psaName} role first.`);
       return;
     }
     setRunning(mode);
@@ -566,12 +700,44 @@ export function PsaRoleSyncWorkspace() {
     );
   }
 
+  const switchDialog = (
+    <AlertDialog open={!!pendingSwitch} onOpenChange={(open) => !open && setPendingSwitch(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Switch to {pendingSwitch ? psaShortName(pendingSwitch) : ""}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Your {psaName} role mapping and email matches are cleared and the schedule is turned off. The saved {psaName} connection and
+            run history are kept, and nothing already assigned in ScalePad changes.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={() => pendingSwitch && applyPsa(pendingSwitch)}>Switch</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+
+  if (!psaChosen || pickerOpen) {
+    return (
+      <>
+        <PsaPicker
+          current={psaChosen ? psaType : null}
+          connections={connections}
+          onPick={handlePick}
+          onCancel={psaChosen ? () => setPickerOpen(false) : undefined}
+        />
+        {switchDialog}
+      </>
+    );
+  }
+
   const leftBody = () => {
-    if (!connection) return <EmptyRow>Connect ConnectWise on the right to load its team roles and members.</EmptyRow>;
+    if (!connection) return <EmptyRow>Connect {psaName} on the right to load its roles and members.</EmptyRow>;
     if (discovering && !discovery) {
       return (
         <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
-          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading ConnectWise and ScalePad data…
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading {psaName} and ScalePad data…
         </div>
       );
     }
@@ -589,7 +755,7 @@ export function PsaRoleSyncWorkspace() {
         <>
           <div className="flex-1 overflow-y-auto">
             {rolesPaged.rows.length === 0 ? (
-              <EmptyRow>No ConnectWise team roles found.</EmptyRow>
+              <EmptyRow>No {psaName} roles found.</EmptyRow>
             ) : (
               rolesPaged.rows.map((role) => (
                 <div key={role.id} className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border">
@@ -624,7 +790,7 @@ export function PsaRoleSyncWorkspace() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-xs font-medium text-foreground truncate">{m.name || m.identifier}</p>
-                    <p className="text-[10px] text-muted-foreground truncate">{m.email || "No email in ConnectWise"}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{m.email || `No email in ${psaName}`}</p>
                   </div>
                   {m.status === "matched" ? (
                     <Badge className="bg-success/15 text-success">{m.via === "override" ? "Matched (override)" : "Matched"}</Badge>
@@ -670,6 +836,53 @@ export function PsaRoleSyncWorkspace() {
     );
   };
 
+  const connectionFields = psa.fields.map((field) => {
+    if (psaType === "connectwise" && field.key === "site") {
+      return (
+        <div key="site" className="contents">
+          <Field label="Site">
+            <select value={connForm.site} onChange={(e) => setConnForm((f) => ({ ...f, site: e.target.value }))} className={`${selectClass} w-full h-8`}>
+              {CW_SITES.map((s) => (
+                <option key={s.value} value={s.value}>{s.label}</option>
+              ))}
+              <option value="custom">Other / on-premises</option>
+            </select>
+          </Field>
+          {connForm.site === "custom" ? (
+            <Field label="Site host" hint="Host name only, for example cw.yourcompany.com">
+              <input value={connForm.customSite || ""} onChange={(e) => setConnForm((f) => ({ ...f, customSite: e.target.value }))} className={inputClass} />
+            </Field>
+          ) : (
+            <div />
+          )}
+        </div>
+      );
+    }
+    return (
+      <Field
+        key={field.key}
+        label={field.label}
+        hint={field.secret ? (connection ? "Leave blank to keep the saved value" : "Stored encrypted; never shown again") : field.hint}
+      >
+        <input
+          type={field.secret ? "password" : "text"}
+          autoComplete={field.secret ? "new-password" : "off"}
+          placeholder={field.secret && connection ? "••••••••" : ""}
+          value={connForm[field.key] || ""}
+          onChange={(e) => setConnForm((f) => ({ ...f, [field.key]: e.target.value }))}
+          className={inputClass}
+        />
+      </Field>
+    );
+  });
+
+  const connectionSummary = () => {
+    if (!connection) return "Not connected";
+    const who = psaType === "autotask" ? connection.settings.username : connection.settings.companyId;
+    const clients = discovery ? `${discovery.clients.linked} of ${discovery.clients.total} clients linked` : "connected";
+    return `${psaName} ${who || ""} · ${clients}`;
+  };
+
   return (
     <>
       <div className="flex gap-4 min-h-[600px]">
@@ -678,12 +891,12 @@ export function PsaRoleSyncWorkspace() {
           <div className="p-4 border-b border-border space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <h3 className="font-heading font-bold text-sm text-foreground">ConnectWise Roles</h3>
+                <h3 className="font-heading font-bold text-sm text-foreground">{psaName} Roles</h3>
                 {discovery && <Badge className="bg-primary/15 text-primary">{mappedCount} mapped</Badge>}
               </div>
               {connection && (
                 <button
-                  onClick={() => runDiscovery(config.emailOverrides)}
+                  onClick={() => runDiscovery(psaType, config.emailOverrides)}
                   disabled={discovering}
                   className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 disabled:opacity-40"
                 >
@@ -696,15 +909,13 @@ export function PsaRoleSyncWorkspace() {
                 <div className="relative">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
                   {leftTab === "roles" ? (
-                    <input type="text" placeholder="Search team roles…" value={roleSearch} onChange={(e) => setRoleSearch(e.target.value)} className={`${inputClass} pl-8`} />
+                    <input type="text" placeholder="Search roles…" value={roleSearch} onChange={(e) => setRoleSearch(e.target.value)} className={`${inputClass} pl-8`} />
                   ) : (
                     <input type="text" placeholder="Search members…" value={memberSearch} onChange={(e) => setMemberSearch(e.target.value)} className={`${inputClass} pl-8`} />
                   )}
                 </div>
                 {leftTab === "roles" ? (
-                  <p className="text-[10px] text-muted-foreground">
-                    Pick the ScalePad account role for each ConnectWise team role. If someone holds two mapped roles on one company, the role higher in this list wins.
-                  </p>
+                  <p className="text-[10px] text-muted-foreground">{psa.roleHelp}</p>
                 ) : (
                   <div className="flex items-center gap-2">
                     <select value={memberFilter} onChange={(e) => setMemberFilter(e.target.value)} className={`${selectClass} flex-1`}>
@@ -737,12 +948,16 @@ export function PsaRoleSyncWorkspace() {
         <div className="w-[60%] flex flex-col bg-card border border-border rounded-lg overflow-hidden">
           <div className="p-4 border-b border-border flex items-center justify-between">
             <div>
-              <h3 className="font-heading font-bold text-sm text-foreground">PSA Role Sync</h3>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                {connection
-                  ? `ConnectWise ${connection.company_id} · ${discovery ? `${discovery.clients.linked} of ${discovery.clients.total} clients linked` : "connected"}`
-                  : "Not connected"}
-              </p>
+              <div className="flex items-center gap-2">
+                <h3 className="font-heading font-bold text-sm text-foreground">PSA Role Sync</h3>
+                <button
+                  onClick={() => setPickerOpen(true)}
+                  className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+                >
+                  <ArrowLeftRight className="w-3 h-3" /> Change PSA
+                </button>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{connectionSummary()}</p>
             </div>
             <div className="flex items-center gap-2">
               {dirty && <span className="text-[10px] text-warning">Unsaved changes</span>}
@@ -774,55 +989,19 @@ export function PsaRoleSyncWorkspace() {
                     <>
                       <CheckCircle2 className="w-4 h-4 text-success" />
                       <span className="text-foreground">
-                        Connected{connection.verified_at ? `, verified ${new Date(connection.verified_at).toLocaleString()}` : ""}
+                        Connected to {psaName}
+                        {connection.verified_at ? `, verified ${new Date(connection.verified_at).toLocaleString()}` : ""}
                       </span>
                     </>
                   ) : (
                     <>
                       <Plug className="w-4 h-4 text-muted-foreground" />
-                      <span className="text-muted-foreground">Add a ConnectWise API member key to get started.</span>
+                      <span className="text-muted-foreground">Add your {psaName} API details to get started.</span>
                     </>
                   )}
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Site">
-                    <select value={connForm.site} onChange={(e) => setConnForm((f) => ({ ...f, site: e.target.value }))} className={`${selectClass} w-full h-8`}>
-                      {CW_SITES.map((s) => (
-                        <option key={s.value} value={s.value}>{s.label}</option>
-                      ))}
-                      <option value="custom">Other / on-premises</option>
-                    </select>
-                  </Field>
-                  {connForm.site === "custom" ? (
-                    <Field label="Site host" hint="Host name only, for example cw.yourcompany.com">
-                      <input value={connForm.customSite} onChange={(e) => setConnForm((f) => ({ ...f, customSite: e.target.value }))} className={inputClass} />
-                    </Field>
-                  ) : (
-                    <div />
-                  )}
-                  <Field label="Company ID" hint="The company you sign in to ConnectWise with">
-                    <input value={connForm.companyId} onChange={(e) => setConnForm((f) => ({ ...f, companyId: e.target.value }))} className={inputClass} />
-                  </Field>
-                  <Field label="Client ID" hint="From developer.connectwise.com">
-                    <input value={connForm.clientId} onChange={(e) => setConnForm((f) => ({ ...f, clientId: e.target.value }))} className={inputClass} />
-                  </Field>
-                  <Field label="Public key">
-                    <input value={connForm.publicKey} onChange={(e) => setConnForm((f) => ({ ...f, publicKey: e.target.value }))} className={inputClass} />
-                  </Field>
-                  <Field label="Private key" hint={connection ? "Leave blank to keep the saved key" : "Stored encrypted; never shown again"}>
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      placeholder={connection ? "••••••••" : ""}
-                      value={connForm.privateKey}
-                      onChange={(e) => setConnForm((f) => ({ ...f, privateKey: e.target.value }))}
-                      className={inputClass}
-                    />
-                  </Field>
-                </div>
-                <p className="text-[10px] text-muted-foreground">
-                  Use an API member with read access to System &gt; Members and Companies &gt; Company Teams and Team Roles. The sync never writes to ConnectWise.
-                </p>
+                <div className="grid grid-cols-2 gap-3">{connectionFields}</div>
+                <p className="text-[10px] text-muted-foreground">{psa.accessHelp}</p>
                 <div className="flex items-center justify-between">
                   <button
                     onClick={handleSaveConnection}
@@ -844,7 +1023,7 @@ export function PsaRoleSyncWorkspace() {
             {rightTab === "run" && (
               <>
                 {!connection ? (
-                  <EmptyRow>Connect ConnectWise first.</EmptyRow>
+                  <EmptyRow>Connect {psaName} first.</EmptyRow>
                 ) : (
                   <>
                     <div className="grid grid-cols-2 gap-3">
@@ -897,10 +1076,10 @@ export function PsaRoleSyncWorkspace() {
                     </div>
                     {running && (
                       <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
-                        <Loader2 className="w-3 h-3 animate-spin" /> Reading every linked client's ConnectWise team. This can take a minute or two.
+                        <Loader2 className="w-3 h-3 animate-spin" /> Reading every linked client's {psaName} team. This can take a minute or two.
                       </p>
                     )}
-                    {result && <RunResults result={result} />}
+                    {result && <RunResults result={result} psaName={psaName} />}
                   </>
                 )}
               </>
@@ -918,28 +1097,32 @@ export function PsaRoleSyncWorkspace() {
                   <EmptyRow>No runs yet.</EmptyRow>
                 ) : (
                   <div className="border border-border rounded-md overflow-hidden">
-                    {runs.map((r) => (
-                      <button
-                        key={r.id}
-                        onClick={() => {
-                          setResult({ mode: r.mode, status: r.status, startedAt: r.started_at, summary: r.summary, details: r.details || {}, error: r.error_message });
-                          setRightTab("run");
-                        }}
-                        className="w-full flex items-center justify-between gap-2 px-4 py-2.5 border-b border-border last:border-b-0 hover:bg-surface-raised text-left"
-                      >
-                        <div>
-                          <p className="text-xs text-foreground">{new Date(r.started_at).toLocaleString()}</p>
-                          <p className="text-[10px] text-muted-foreground">
-                            {r.trigger_type === "scheduled" ? "Scheduled" : "Manual"} · {r.mode === "live" ? "Live" : "Dry run"}
-                            {r.summary ? ` · ${r.mode === "live" ? r.summary.applied || 0 : r.summary.planned || 0} assignment(s)` : ""}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <Badge className={STATUS_COLORS[r.status] || "bg-muted text-muted-foreground"}>{r.status}</Badge>
-                          <ChevronRight className="w-3 h-3 text-muted-foreground" />
-                        </div>
-                      </button>
-                    ))}
+                    {runs.map((r) => {
+                      const runPsa = (r.details as { psaType?: PsaType } | null)?.psaType;
+                      return (
+                        <button
+                          key={r.id}
+                          onClick={() => {
+                            setResult({ mode: r.mode, status: r.status, startedAt: r.started_at, summary: r.summary, details: r.details || {}, error: r.error_message });
+                            setRightTab("run");
+                          }}
+                          className="w-full flex items-center justify-between gap-2 px-4 py-2.5 border-b border-border last:border-b-0 hover:bg-surface-raised text-left"
+                        >
+                          <div>
+                            <p className="text-xs text-foreground">{new Date(r.started_at).toLocaleString()}</p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {runPsa ? `${psaShortName(runPsa)} · ` : ""}
+                              {r.trigger_type === "scheduled" ? "Scheduled" : "Manual"} · {r.mode === "live" ? "Live" : "Dry run"}
+                              {r.summary ? ` · ${r.mode === "live" ? r.summary.applied || 0 : r.summary.planned || 0} assignment(s)` : ""}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <Badge className={STATUS_COLORS[r.status] || "bg-muted text-muted-foreground"}>{r.status}</Badge>
+                            <ChevronRight className="w-3 h-3 text-muted-foreground" />
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </>
@@ -948,12 +1131,14 @@ export function PsaRoleSyncWorkspace() {
         </div>
       </div>
 
+      {switchDialog}
+
       <AlertDialog open={confirmLive} onOpenChange={setConfirmLive}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Run the sync live?</AlertDialogTitle>
             <AlertDialogDescription>
-              This assigns matched ConnectWise team members to their ScalePad clients with the mapped account roles. It only adds assignments
+              This assigns matched {psaName} team members to their ScalePad clients with the mapped account roles. It only adds assignments
               {config.overwriteRoles ? " and replaces different roles" : ""}; nobody is removed. Run a dry run first if you haven't.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -967,9 +1152,9 @@ export function PsaRoleSyncWorkspace() {
       <AlertDialog open={confirmDisconnect} onOpenChange={setConfirmDisconnect}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Disconnect ConnectWise?</AlertDialogTitle>
+            <AlertDialogTitle>Disconnect {psaName}?</AlertDialogTitle>
             <AlertDialogDescription>
-              The saved ConnectWise keys are deleted and the schedule is turned off. Your role mapping and run history are kept.
+              The saved {psaName} API details are deleted and the schedule is turned off. Your role mapping and run history are kept.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

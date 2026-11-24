@@ -34,6 +34,11 @@ export type PlanConfig = {
   emailOverrides: Record<string, string>;
   /** Replace a different role already set in CS. Off by default: conflicts are reported instead. */
   overwriteRoles: boolean;
+  /**
+   * PSA role ids in priority order, for a member who holds two mapped roles on one company.
+   * Kept as a list because object key order can't carry it: number-like keys always sort first.
+   */
+  rolePriority?: string[];
 };
 
 export type PlanAction = {
@@ -137,8 +142,9 @@ export function buildPlan(input: {
   const clientsByPsaId = new Map<string, CsClient>();
   for (const client of input.clients) if (client.psaCompanyId) clientsByPsaId.set(client.psaCompanyId, client);
   const current = new Map(input.assignments.map((a) => [`${a.clientId}:${a.userId}`, a]));
-  // Map order is the role priority when one member holds several mapped roles on a company.
-  const rolePriority = Object.keys(config.roleMap);
+  // Priority when one member holds several mapped roles on a company; unlisted roles go last.
+  const priority = new Map((config.rolePriority || []).map((id, index) => [id, index]));
+  const rank = (roleId: string) => priority.get(roleId) ?? Number.MAX_SAFE_INTEGER;
 
   const actions: PlanAction[] = [];
   const skips: PlanSkip[] = [];
@@ -166,7 +172,7 @@ export function buildPlan(input: {
 
     const mapped = entries
       .filter((e) => config.roleMap[e.teamRoleId])
-      .sort((a, b) => rolePriority.indexOf(a.teamRoleId) - rolePriority.indexOf(b.teamRoleId));
+      .sort((a, b) => rank(a.teamRoleId) - rank(b.teamRoleId));
     if (!mapped.length) {
       skips.push({ reason: "role-not-mapped", clientName: client.name, memberLabel: label, detail: entries.map((e) => e.teamRoleName).join(", ") });
       continue;
@@ -285,6 +291,48 @@ export function psaCompanyIdFromLineage(lineage: unknown, brandPattern: RegExp):
     if (brandPattern.test(brand) && id != null && String(id).trim()) return String(id).trim();
   }
   return null;
+}
+
+/** Synthetic Autotask "role" for the company's Account Manager (Companies.ownerResourceID). */
+export const AUTOTASK_OWNER_ROLE_ID = "owner";
+export const AUTOTASK_OWNER_ROLE_NAME = "Account Manager (company owner)";
+
+/**
+ * Autotask company teams carry no role. Build team entries the same shape as ConnectWise's:
+ * the company owner gets the synthetic owner role, and each Company Team member gets their
+ * default Autotask role (ResourceRoleDepartments.isDefault). A member with no default role gets
+ * an empty role id, which the planner reports as "role not mapped".
+ */
+export function buildAutotaskTeamEntries(input: {
+  companies: Array<{ id: string; name: string; ownerResourceId: string | null }>;
+  teamRows: Array<{ companyId: string; resourceId: string }>;
+  defaultRoleByResource: Map<string, string>;
+  roleNames: Map<string, string>;
+}): PsaTeamEntry[] {
+  const entries: PsaTeamEntry[] = [];
+  const names = new Map(input.companies.map((c) => [c.id, c.name]));
+  for (const company of input.companies) {
+    if (!company.ownerResourceId) continue;
+    entries.push({
+      companyId: company.id,
+      companyName: company.name,
+      memberId: company.ownerResourceId,
+      teamRoleId: AUTOTASK_OWNER_ROLE_ID,
+      teamRoleName: AUTOTASK_OWNER_ROLE_NAME,
+    });
+  }
+  for (const row of input.teamRows) {
+    if (!names.has(row.companyId)) continue;
+    const roleId = input.defaultRoleByResource.get(row.resourceId) || "";
+    entries.push({
+      companyId: row.companyId,
+      companyName: names.get(row.companyId) || "",
+      memberId: row.resourceId,
+      teamRoleId: roleId,
+      teamRoleName: roleId ? input.roleNames.get(roleId) || `Role ${roleId}` : "No default role",
+    });
+  }
+  return entries;
 }
 
 /** True when a task is due, given its interval in days and last run time. */
