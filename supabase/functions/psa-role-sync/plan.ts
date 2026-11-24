@@ -335,6 +335,31 @@ export function buildAutotaskTeamEntries(input: {
   return entries;
 }
 
+/**
+ * Halo has no client team list: each client has three fixed agent slots. These are its "roles",
+ * in priority order for an agent who fills more than one slot on the same client.
+ */
+export const HALO_SLOTS = [
+  { id: "accountmanagertech", name: "Account Manager" },
+  { id: "pritech", name: "Primary Technician" },
+  { id: "sectech", name: "Secondary Technician" },
+] as const;
+
+/** Build team entries from Halo clients' agent slots. 0 means empty and 1 is Halo's "Unassigned" agent. */
+export function buildHaloTeamEntries(clients: Array<{ id: string; name: string; slots: Record<string, unknown> }>): PsaTeamEntry[] {
+  const entries: PsaTeamEntry[] = [];
+  for (const client of clients) {
+    for (const slot of HALO_SLOTS) {
+      const agentId = client.slots[slot.id];
+      if (agentId == null) continue;
+      const memberId = String(agentId).trim();
+      if (!memberId || memberId === "0" || memberId === "1") continue;
+      entries.push({ companyId: client.id, companyName: client.name, memberId, teamRoleId: slot.id, teamRoleName: slot.name });
+    }
+  }
+  return entries;
+}
+
 /** True when a task is due, given its interval in days and last run time. */
 export function isDue(lastRunAt: string | null, intervalDays: number, now = Date.now()) {
   if (!lastRunAt) return true;

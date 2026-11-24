@@ -620,7 +620,7 @@ export function PsaRoleSyncWorkspace() {
     const fields: Record<string, string> = {};
     for (const field of psa.fields) fields[field.key] = (connForm[field.key] || "").trim();
     if (psaType === "connectwise" && connForm.site === "custom") fields.site = (connForm.customSite || "").trim();
-    const missing = psa.fields.filter((f) => !fields[f.key] && !(f.secret && connection));
+    const missing = psa.fields.filter((f) => !fields[f.key] && !f.optional && !(f.secret && connection));
     if (missing.length) {
       toast.error(`Fill in ${missing.map((f) => f.label).join(", ")}.`);
       return;
@@ -878,7 +878,7 @@ export function PsaRoleSyncWorkspace() {
 
   const connectionSummary = () => {
     if (!connection) return "Not connected";
-    const who = psaType === "autotask" ? connection.settings.username : connection.settings.companyId;
+    const who = { connectwise: connection.settings.companyId, autotask: connection.settings.username, halo: (connection.settings.url || "").replace(/^https:\/\//, "") }[psaType];
     const clients = discovery ? `${discovery.clients.linked} of ${discovery.clients.total} clients linked` : "connected";
     return `${psaName} ${who || ""} · ${clients}`;
   };

@@ -3,6 +3,8 @@ import {
   AUTOTASK_OWNER_ROLE_ID,
   batchActions,
   buildAutotaskTeamEntries,
+  buildHaloTeamEntries,
+  HALO_SLOTS,
   buildPlan,
   isDue,
   psaCompanyIdFromLineage,
@@ -212,6 +214,35 @@ describe("buildAutotaskTeamEntries", () => {
     });
     expect(result.actions).toEqual([expect.objectContaining({ userId: "u-alex", roleId: "r-am" })]);
     expect(result.skips).toEqual([expect.objectContaining({ reason: "duplicate-role" })]);
+  });
+});
+
+describe("buildHaloTeamEntries", () => {
+  it("turns filled agent slots into team entries and skips empty or Unassigned slots", () => {
+    const entries = buildHaloTeamEntries([
+      { id: "100", name: "Contoso", slots: { accountmanagertech: 11, pritech: 0, sectech: 1 } },
+      { id: "200", name: "Fabrikam", slots: { accountmanagertech: null, pritech: 12, sectech: 13 } },
+    ]);
+    expect(entries).toEqual([
+      { companyId: "100", companyName: "Contoso", memberId: "11", teamRoleId: "accountmanagertech", teamRoleName: "Account Manager" },
+      { companyId: "200", companyName: "Fabrikam", memberId: "12", teamRoleId: "pritech", teamRoleName: "Primary Technician" },
+      { companyId: "200", companyName: "Fabrikam", memberId: "13", teamRoleId: "sectech", teamRoleName: "Secondary Technician" },
+    ]);
+  });
+
+  it("gives an agent in two slots on one client the higher-priority role", () => {
+    const haloMembers: PsaMember[] = [{ id: "11", identifier: "alex", name: "Alex Smith", email: "alex.smith@msp.example", inactive: false }];
+    const teams = buildHaloTeamEntries([{ id: "100", name: "Contoso", slots: { accountmanagertech: 11, pritech: 11 } }]);
+    const result = buildPlan({
+      members: haloMembers,
+      teams,
+      users,
+      clients,
+      roles,
+      assignments: [],
+      config: config({ roleMap: { accountmanagertech: "r-am", pritech: "r-tech" }, rolePriority: HALO_SLOTS.map((s) => s.id) }),
+    });
+    expect(result.actions).toEqual([expect.objectContaining({ userId: "u-alex", roleId: "r-am" })]);
   });
 });
 

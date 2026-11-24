@@ -5,7 +5,8 @@
 //   - ConnectWise: company Team tab rows carry a team role per member.
 //   - Autotask: the company owner (Account Manager) gets a synthetic "owner" role, and each
 //     Company Team member gets their default Autotask role.
-//   - Halo: not yet supported.
+//   - Halo: each client's three agent slots (Account Manager, Primary and Secondary Technician)
+//     act as the roles.
 //
 // Modes:
 //   - Manual (browser): x-scalepad-api-key header + { action, psaType?, ... }. Actions:
@@ -22,7 +23,9 @@ import {
   AUTOTASK_OWNER_ROLE_NAME,
   batchActions,
   buildAutotaskTeamEntries,
+  buildHaloTeamEntries,
   buildPlan,
+  HALO_SLOTS,
   isDue,
   matchMember,
   normalizeEmail,
@@ -50,9 +53,9 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ApiRow = any;
 
-const PSA_TYPES = ["connectwise", "autotask"] as const;
+const PSA_TYPES = ["connectwise", "autotask", "halo"] as const;
 type PsaType = (typeof PSA_TYPES)[number];
-const PSA_LABELS: Record<PsaType, string> = { connectwise: "ConnectWise", autotask: "Autotask" };
+const PSA_LABELS: Record<PsaType, string> = { connectwise: "ConnectWise", autotask: "Autotask", halo: "Halo" };
 
 type Config = {
   psaType?: PsaType;
@@ -340,9 +343,75 @@ function autotaskAdapter(conn: Connection): PsaAdapter {
   };
 }
 
+// HaloPSA: OAuth client credentials against {url}/auth/token, then Bearer calls to {url}/api.
+// The API allows 700 requests per rolling 5 minutes, so per-client reads are paced.
+
+function haloBaseUrl(url: string) {
+  let parsed: URL;
+  try { parsed = new URL(/^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`); }
+  catch { throw new Error("Halo URL must look like https://yourcompany.halopsa.com"); }
+  if (parsed.protocol !== "https:" || !/^[a-z0-9.-]+$/i.test(parsed.hostname)) throw new Error("Halo URL must be an https address such as https://yourcompany.halopsa.com");
+  return `https://${parsed.host}`;
+}
+
+function haloAdapter(conn: Connection): PsaAdapter {
+  const { url, clientId, tenant } = conn.settings;
+  const base = haloBaseUrl(url);
+  let token: { value: string; expiresAt: number } | null = null;
+  const accessToken = async () => {
+    if (token && Date.now() < token.expiresAt) return token.value;
+    const result = await fetchWithRetry(`${base}/auth/token${tenant ? `?tenant=${encodeURIComponent(tenant)}` : ""}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: new URLSearchParams({ grant_type: "client_credentials", client_id: clientId, client_secret: conn.secret, scope: "all" }).toString(),
+    }, "Halo sign-in");
+    const value = text(result.access_token);
+    if (!value) throw new Error("Halo did not return an access token. Check the client ID and secret.");
+    token = { value, expiresAt: Date.now() + Math.max(60, Number(result.expires_in) || 3600) * 1000 - 30_000 };
+    return value;
+  };
+  const call = async (path: string) =>
+    fetchWithRetry(`${base}/api${path}`, { headers: { Authorization: `Bearer ${await accessToken()}`, Accept: "application/json" } }, `Halo GET ${path.split("?")[0]}`);
+
+  return {
+    brandPattern: /halo/i,
+    test: async () => { await call("/Client?count=1"); },
+    listMembers: async () => {
+      const result = await call("/Agent?includedisabled=true&includeenabled=true");
+      const rows = (Array.isArray(result) ? result : result.results || result.agents || []) as ApiRow[];
+      return rows
+        .filter((a) => text(a.id) !== "1") // Halo's built-in "Unassigned" agent
+        .map((a) => ({
+          id: text(a.id),
+          identifier: text(a.email) || `agent-${text(a.id)}`,
+          name: text(a.name) || [a.firstname, a.surname].filter(Boolean).join(" ").trim(),
+          email: text(a.email),
+          inactive: a.isdisabled === true,
+        }));
+    },
+    listTeamRoles: async () => HALO_SLOTS.map((slot) => ({ id: slot.id, name: slot.name })),
+    listTeams: async (companies) => {
+      // pritech / sectech are only on the single-client response, so read each linked client.
+      const clients: Array<{ id: string; name: string; slots: Record<string, unknown> }> = [];
+      const errors: string[] = [];
+      for (const company of companies) {
+        try {
+          const row = await call(`/Client/${encodeURIComponent(company.id)}`);
+          clients.push({ id: company.id, name: company.name, slots: { accountmanagertech: row.accountmanagertech, pritech: row.pritech, sectech: row.sectech } });
+        } catch (error) {
+          errors.push(`${company.name}: could not read Halo client (${errorMessage(error)})`);
+        }
+        await sleep(450);
+      }
+      return { entries: buildHaloTeamEntries(clients), errors };
+    },
+  };
+}
+
 function adapterFor(conn: Connection): PsaAdapter {
   if (conn.psaType === "connectwise") return connectWiseAdapter(conn);
   if (conn.psaType === "autotask") return autotaskAdapter(conn);
+  if (conn.psaType === "halo") return haloAdapter(conn);
   throw new Error(`PSA type ${conn.psaType} is not supported yet.`);
 }
 
@@ -353,6 +422,12 @@ async function connectionSettings(psaType: PsaType, body: ApiRow): Promise<Recor
     const settings = { site: field("site"), companyId: field("companyId"), publicKey: field("publicKey"), clientId: field("clientId") };
     if (Object.values(settings).some((v) => !v)) throw new Error("Site, company ID, public key and client ID are required.");
     return settings;
+  }
+  if (psaType === "halo") {
+    const url = field("url");
+    const clientId = field("clientId");
+    if (!url || !clientId) throw new Error("Halo URL and client ID are required.");
+    return { url: haloBaseUrl(url), clientId, tenant: field("tenant") };
   }
   const username = field("username");
   const integrationCode = field("integrationCode");
@@ -562,7 +637,7 @@ Deno.serve(async (req) => {
     const action = text(body.action);
     const psaType = asPsaType(body.psaType);
     const needsPsa = ["connection.save", "connection.delete", "discover"].includes(action);
-    if (needsPsa && !psaType) return json({ error: "Choose ConnectWise or Autotask." }, 400);
+    if (needsPsa && !psaType) return json({ error: "Choose ConnectWise, Autotask or Halo." }, 400);
 
     switch (action) {
       case "connection.status": {
@@ -578,7 +653,7 @@ Deno.serve(async (req) => {
         let secret = text(body.secret).trim();
         if (!secret) {
           const existing = await loadConnection(db, ownerHash, psaType!);
-          if (!existing) return json({ error: `${psaType === "autotask" ? "API secret" : "Private key"} is required.` }, 400);
+          if (!existing) return json({ error: `${{ connectwise: "Private key", autotask: "API secret", halo: "Client secret" }[psaType!]} is required.` }, 400);
           secret = existing.secret;
         }
         try { await adapterFor({ psaType: psaType!, settings, secret }).test(); }

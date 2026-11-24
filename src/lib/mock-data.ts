@@ -145,9 +145,9 @@ export const SEED_APPS: MarketplaceApp[] = [
     id: "app-014",
     name: "PSA Role Sync",
     description:
-      "Keep ScalePad CS client account teams in step with your PSA. Maps ConnectWise or Autotask team roles to account roles and assigns matching team members on a monthly schedule.",
+      "Keep ScalePad CS client account teams in step with your PSA. Maps ConnectWise, Autotask or HaloPSA team roles to account roles and assigns matching team members on a monthly schedule.",
     how_it_works:
-      "Pick your PSA (ConnectWise or Autotask; HaloPSA coming soon) and connect it with an API user. For each linked client the sync reads the PSA team: ConnectWise Company Team roles, or Autotask's Account Manager plus Company Team members by their default role. It matches people to ScalePad users by email (with manual overrides) and assigns them to the client's account team with the mapped role. Unmatched members and unmapped roles are skipped and reported, so every run completes. The sync only adds assignments and never writes to the PSA.",
+      "Pick your PSA (ConnectWise, Autotask or HaloPSA) and connect it with an API user. For each linked client the sync reads the PSA team: ConnectWise Company Team roles, Autotask's Account Manager plus Company Team members by their default role, or Halo's Account Manager, Primary and Secondary Technician. It matches people to ScalePad users by email (with manual overrides) and assigns them to the client's account team with the mapped role. Unmatched members and unmapped roles are skipped and reported, so every run completes. The sync only adds assignments and never writes to the PSA.",
     category: "Utilities",
     icon: "🔁",
     status: "beta",

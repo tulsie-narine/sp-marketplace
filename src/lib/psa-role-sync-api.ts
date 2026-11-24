@@ -10,7 +10,7 @@ import { deleteTask, listTasks, saveTask, setTaskSchedule, type ScheduledTask } 
 
 export const PSA_ROLE_SYNC_APP_ID = "psa-role-sync";
 
-export type PsaType = "connectwise" | "autotask";
+export type PsaType = "connectwise" | "autotask" | "halo";
 
 export type PsaRoleSyncConfig = {
   psaType: PsaType;
@@ -41,10 +41,12 @@ export type PsaField = {
   hint?: string;
   /** The secret field: write-only, encrypted server-side, blank on edit keeps the saved value. */
   secret?: boolean;
+  /** Can be left blank. */
+  optional?: boolean;
 };
 
 export type PsaOption = {
-  id: PsaType | "halo";
+  id: PsaType;
   label: string;
   blurb: string;
   available: boolean;
@@ -91,16 +93,23 @@ export const PSA_OPTIONS: PsaOption[] = [
   {
     id: "halo",
     label: "HaloPSA",
-    blurb: "Coming soon.",
-    available: false,
-    roleHelp: "",
-    accessHelp: "",
-    fields: [],
+    blurb: "Each client's Account Manager, Primary Technician and Secondary Technician.",
+    available: true,
+    roleHelp:
+      "Halo has no client team list; each client has these three agent slots. Pick the ScalePad role for each. If one agent fills two slots on a client, the higher row wins.",
+    accessHelp:
+      "Create an API application in Halo (Configuration > Integrations > HaloPSA API > Applications) using Client ID and Secret, with read access to agents and customers. The sync never writes to Halo.",
+    fields: [
+      { key: "url", label: "Halo URL", hint: "The address you sign in at, for example https://yourcompany.halopsa.com" },
+      { key: "clientId", label: "Client ID" },
+      { key: "tenant", label: "Tenant", hint: "Only if Halo gave you one; most can leave this blank", optional: true },
+      { key: "secret", label: "Client secret", secret: true },
+    ],
   },
 ];
 
 export const psaOption = (psaType: PsaType) => PSA_OPTIONS.find((o) => o.id === psaType)!;
-export const psaShortName = (psaType: PsaType) => (psaType === "autotask" ? "Autotask" : "ConnectWise");
+export const psaShortName = (psaType: PsaType) => ({ connectwise: "ConnectWise", autotask: "Autotask", halo: "Halo" })[psaType];
 
 // --- Types returned by the edge function ---
 

@@ -1,4 +1,4 @@
--- PSA Role Sync: maps PSA company team roles (ConnectWise, Autotask) to ScalePad CS
+-- PSA Role Sync: maps PSA company team roles (ConnectWise, Autotask, Halo) to ScalePad CS
 -- client account team roles. Sync settings live in scheduled_tasks (app_id = 'psa-role-sync').
 -- These tables hold the PSA connection, a ledger of what the sync assigned, and run history.
 
@@ -6,7 +6,8 @@
 -- settings holds the non-secret connection fields, which differ per PSA:
 --   connectwise: site, companyId, publicKey, clientId
 --   autotask:    username, integrationCode, zoneUrl (looked up from the username)
--- The secret (ConnectWise private key, Autotask API secret) is encrypted by the psa-role-sync
+--   halo:        url, clientId, tenant (optional)
+-- The secret (ConnectWise private key, Autotask API secret, Halo client secret) is encrypted by the psa-role-sync
 -- edge function (AES-GCM, key in the PSA_CREDENTIALS_KEY function secret) before it is stored.
 -- It is never returned to the browser.
 CREATE TABLE IF NOT EXISTS public.psa_connections (
