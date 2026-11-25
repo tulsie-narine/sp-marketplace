@@ -141,4 +141,24 @@ export const SEED_APPS: MarketplaceApp[] = [
     },
     created_at: "2026-04-10T10:00:00Z",
   },
+  {
+    id: "app-015",
+    name: "ControlMap Assessment Importer",
+    description:
+      "Bring a completed compliance assessment from any tool or spreadsheet into ControlMap. Matches each answer to the right objective and updates status, notes and evidence details.",
+    how_it_works:
+      "Pick a client and framework, then upload an Excel or CSV assessment in any layout. The importer works out which columns hold the objective ID, name, response, notes and evidence, and suggests a ControlMap status for each response. It matches every row to an objective by ID and wording, with no AI. You see how confident each match is and can accept, change or skip rows. The file is read in your browser and only the updates you approve are sent to ScalePad. Nothing is written until you confirm, and you can download a change log with each objective's status before and after.",
+    category: "Import/Export",
+    icon: "📋",
+    status: "beta",
+    version: "1.0.3",
+    author: "ScalePad Team",
+    api_endpoint: "/controlmap/v1/clients/{client_id}/frameworks/{framework_id}/objectives/{objective_id}",
+    input_schema: {
+      realApi: true,
+      appType: "cm-assessment-importer",
+      fields: [],
+    },
+    created_at: "2026-11-25T10:00:00Z",
+  },
 ];

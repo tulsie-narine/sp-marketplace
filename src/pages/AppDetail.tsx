@@ -10,6 +10,7 @@ import { TenantMigrationWorkspace } from "@/components/workspace/TenantMigration
 import { LcmDataResetWorkspace } from "@/components/workspace/LcmDataResetWorkspace";
 import { ClientCleanUpWorkspace } from "@/components/workspace/ClientCleanUpWorkspace";
 import { RiskRoadmapWorkspace } from "@/components/workspace/RiskRoadmapWorkspace";
+import { CmAssessmentImporterWorkspace } from "@/components/workspace/CmAssessmentImporterWorkspace";
 import { AppRatingsComments } from "@/components/marketplace/AppRatingsComments";
 import { ScalePadMark } from "@/components/branding/ScalePadMark";
 
@@ -100,6 +101,8 @@ export default function AppDetail() {
           <ClientCleanUpWorkspace />
         ) : (app.input_schema as any)?.appType === "risk-roadmap" ? (
           <RiskRoadmapWorkspace />
+        ) : (app.input_schema as any)?.appType === "cm-assessment-importer" ? (
+          <CmAssessmentImporterWorkspace />
         ) : (app.input_schema as any)?.realApi ? (
           <OpportunitiesWorkspace app={app} />
         ) : (
