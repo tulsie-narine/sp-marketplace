@@ -236,8 +236,29 @@ export const savePsaConnection = (psaType: PsaType, fields: Record<string, strin
 
 export const deletePsaConnection = (psaType: PsaType) => callSync<{ connected: boolean }>("connection.delete", { psaType });
 
-export const discoverPsa = (psaType: PsaType, emailOverrides: Record<string, string>, clientLinks: Record<string, string> = {}) =>
-  callSync<Discovery>("discover", { psaType, emailOverrides, clientLinks });
+export const discoverPsa = async (psaType: PsaType, emailOverrides: Record<string, string>, clientLinks: Record<string, string> = {}): Promise<Discovery> => {
+  const d = await callSync<Partial<Discovery> & { clients?: Partial<Discovery["clients"]> & { unlinked?: unknown[] } }>("discover", { psaType, emailOverrides, clientLinks });
+  // An engine deployed before custom fields and manual links returns fewer fields and unlinked
+  // clients as plain names. Fill the gaps so the page still works until it's redeployed.
+  const unlinked = (d.clients?.unlinked || []).map((c, i) =>
+    typeof c === "string" ? { id: `name-only-${i}`, name: c } : (c as { id: string; name: string }),
+  );
+  const outdated = !Array.isArray(d.customFields);
+  return {
+    psaType,
+    psaRoles: d.psaRoles || [],
+    csRoles: d.csRoles || [],
+    members: d.members || [],
+    segments: d.segments || [],
+    customFields: d.customFields || [],
+    psaCompanies: d.psaCompanies || [],
+    warnings: [
+      ...(d.warnings || []),
+      ...(outdated ? ["The PSA Role Sync engine is out of date, so custom fields and manual links aren't available yet. Ask your admin to redeploy psa-role-sync."] : []),
+    ],
+    clients: { total: d.clients?.total || 0, linked: d.clients?.linked || 0, unlinked, manual: d.clients?.manual || [] },
+  };
+};
 
 export type CreatedRoleResult = { label: string; id: string | null; created: boolean; error?: string };
 
