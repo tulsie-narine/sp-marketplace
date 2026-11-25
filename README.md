@@ -4,7 +4,7 @@ The ScalePad App Marketplace is an authenticated React application for discoveri
 
 ## App catalog
 
-The marketplace ships with seven registered apps:
+The marketplace ships with these registered apps:
 
 | App | Category | What it does |
 | --- | --- | --- |
@@ -15,8 +15,9 @@ The marketplace ships with seven registered apps:
 | **Client Clean Up** | Utilities | Permanently removes selected Lifecycle Manager data for selected clients by object type. |
 | **ControlMap to LMX Workstream Sync** | Reporting | Reviews ControlMap risks and action items, then syncs selected priorities into Lifecycle Manager initiatives or action items. |
 | **LCM Data Reset** | Utilities | Runs a controlled Lifecycle Manager reset workflow based on the tenant migration and cleanup orchestration. |
+| **ControlMap Assessment Importer** | Import/Export | Reads a completed compliance assessment (Excel or CSV, any layout), matches each row to a ControlMap objective for review, then updates status, notes and evidence details. |
 
-All seven apps are seeded in [`src/lib/mock-data.ts`](src/lib/mock-data.ts). App metadata includes the name, description, category, status, version, API endpoint, and workspace type. New apps can be added from the admin area and are persisted in the browser under the `sp_apps` key.
+All of these apps are seeded in [`src/lib/mock-data.ts`](src/lib/mock-data.ts). App metadata includes the name, description, category, status, version, API endpoint, and workspace type. New apps can be added from the admin area and are persisted in the browser under the `sp_apps` key.
 
 ## Highlights
 
@@ -130,6 +131,8 @@ npm run test:watch  # Run Vitest in watch mode
 ```
 
 ## API and security notes
+
+The ControlMap Assessment Importer reads spreadsheets in the browser with SheetJS Community Edition 0.20.3 (`src/vendor/xlsx.mjs`, Apache License 2.0), loaded only when a file is chosen. Its matching engine lives in `src/lib/controlmap-importer` and is shared with the standalone Chrome extension version of the tool.
 
 - Browser code calls ScalePad through the `scalepad-proxy` Supabase Edge Function.
 - Raw ScalePad API keys are stored only in session storage for the active session; they are not written to the app registry or database.
