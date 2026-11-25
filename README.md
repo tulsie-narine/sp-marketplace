@@ -15,6 +15,7 @@ The marketplace ships with these registered apps:
 | **Client Clean Up** | Utilities | Permanently removes selected Lifecycle Manager data for selected clients by object type. |
 | **ControlMap to LMX Workstream Sync** | Reporting | Reviews ControlMap risks and action items, then syncs selected priorities into Lifecycle Manager initiatives or action items. |
 | **LCM Data Reset** | Utilities | Runs a controlled Lifecycle Manager reset workflow based on the tenant migration and cleanup orchestration. |
+| **PSA Role Sync** | Utilities | Maps ConnectWise, Autotask or HaloPSA team roles (and ConnectWise company custom fields) to ScalePad CS account roles and client segments, and assigns matching team members to each client, on a monthly schedule. |
 | **ControlMap Assessment Importer** | Import/Export | Reads a completed compliance assessment (Excel or CSV, any layout), matches each row to a ControlMap objective for review, then updates status, notes and evidence details. |
 
 All of these apps are seeded in [`src/lib/mock-data.ts`](src/lib/mock-data.ts). App metadata includes the name, description, category, status, version, API endpoint, and workspace type. New apps can be added from the admin area and are persisted in the browser under the `sp_apps` key.
@@ -78,15 +79,43 @@ The login screen supports two access modes:
 
 ## Supabase setup
 
-The repository includes three Edge Functions:
+The repository includes these Edge Functions:
 
 | Function | Purpose |
 | --- | --- |
 | `scalepad-proxy` | Proxies ScalePad requests and attaches the session API key without exposing direct API calls in the browser. |
 | `app-feedback` | Stores ratings and comments and supports admin moderation. |
 | `lcm-data-reset-cron` | Provides the Lifecycle Manager reset runner used by the reset workflow. |
+| `user-vault` | Saves a user's ScalePad key and generic scheduled tasks, scoped to a hash of the key. |
+| `risk-roadmap-sync` | Runs the ControlMap to LMX Workstream Sync, manually or on schedule. |
+| `psa-role-sync` | Stores the encrypted PSA connection and runs PSA Role Sync, manually or on schedule. |
 
 Apply the SQL migrations in `supabase/migrations`, configure the Supabase URL and publishable key, and deploy the functions for a connected environment. Functions that use the Supabase service role require the `SUPABASE_SERVICE_ROLE_KEY` secret to be configured in Supabase; never commit that secret or a ScalePad API key.
+
+### PSA Role Sync setup
+
+`psa-role-sync` needs one extra function secret, `PSA_CREDENTIALS_KEY`: a long random string used to encrypt saved PSA secrets (the ConnectWise private key, Autotask API secret or Halo client secret). Set it before anyone connects, and don't change it afterwards, because saved connections can't be decrypted with a new key.
+
+```bash
+supabase secrets set PSA_CREDENTIALS_KEY="$(openssl rand -base64 48)"
+```
+
+Scheduled runs need a daily pg_cron job that calls the function with the service-role key. The SQL is in a comment at the end of `supabase/migrations/20261124000000_psa_role_sync.sql`. The function itself skips tasks whose interval (30 days by default) hasn't passed.
+
+The user first picks their PSA: ConnectWise, Autotask or HaloPSA. How a run works:
+
+1. Reads ScalePad clients and takes each client's PSA company ID from `record_lineage`, matched on the vendor's brand name. Clients the integration didn't link can be linked by hand on the Unlinked tab (saved as `clientLinks`); a manual link wins over lineage.
+2. Reads the PSA's members and the team of every linked client:
+   - **ConnectWise:** each company's Team tab, where every member has a team role.
+   - **Autotask:** Company Teams have no role, so the company's Account Manager (`ownerResourceID`) gets an "Account Manager (company owner)" role, and each Company Team member gets their default Autotask role (`ResourceRoleDepartments.isDefault`).
+   - **HaloPSA:** there is no client team list. Each client's three agent slots, `accountmanagertech`, `pritech` and `sectech`, are the roles (Account Manager, Primary Technician, Secondary Technician). Client reads are paced to stay under Halo's 700 requests per 5 minutes.
+3. Matches members to ScalePad users by email, or by an override set in the Members tab.
+4. Assigns each matched member to the client's account team with the mapped role (`PUT /app/v1/clients/account-team`).
+5. **ConnectWise custom fields** (Fields tab) can also be used:
+   - **As an account role:** the field's value names a person (login ID, email, "First Last" or "Last, First"). It is matched to a ConnectWise member and then a ScalePad user, or to a ScalePad email set for that value. Field roles share the role priority with team roles.
+   - **As the client segment:** each value maps to a ScalePad segment (`GET /app/v1/segments`); values that match a segment name map themselves. Current segments come from `GET /app/v1/clients`, and changes are sent in bulk with `PATCH /app/v1/clients` (`client_ids`, `segment_id`). This replaces the client's current segment; a blank value leaves it alone.
+
+The sync only adds account team assignments. Unmatched members, unmapped roles, role conflicts and per-client failures are reported in the run, so they never stop it. The matching and planning logic lives in `supabase/functions/psa-role-sync/plan.ts`, and its tests are in `src/lib/psa-role-sync-plan.test.ts`.
 
 ## Routes
 
