@@ -27,10 +27,12 @@ import {
   Trash2,
   X,
   ArrowLeftRight,
+  Plus,
 } from "lucide-react";
 import {
   CW_SITES,
   PSA_OPTIONS,
+  createCsRoles,
   SKIP_REASON_LABELS,
   deletePsaConnection,
   discoverPsa,
@@ -67,6 +69,11 @@ const MEMBER_FILTERS = [
   { value: "unmatched", label: "No ScalePad user" },
   { value: "inactive", label: "Inactive" },
 ];
+/** Dropdown value for "create this PSA role in ScalePad". Not a real role id. */
+const CREATE_ROLE = "__create__";
+
+const sameLabel = (a: string, b: string) => a.replace(/\s+/g, " ").trim().toLowerCase() === b.replace(/\s+/g, " ").trim().toLowerCase();
+
 const ACTION_LABELS: Record<string, string> = { assign: "Assign", "set-role": "Set role", "change-role": "Change role" };
 const STATUS_COLORS: Record<string, string> = {
   success: "bg-success/15 text-success",
@@ -399,6 +406,11 @@ export function PsaRoleSyncWorkspace() {
   const [running, setRunning] = useState<"dry-run" | "live" | null>(null);
   const [confirmLive, setConfirmLive] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [checkedRoleIds, setCheckedRoleIds] = useState<Set<string>>(new Set());
+  const [pendingCreate, setPendingCreate] = useState<string[] | null>(null);
+  // What the create dialog lists; kept after it closes so the closing animation doesn't show "0 roles".
+  const [createDialogIds, setCreateDialogIds] = useState<string[]>([]);
+  const [creatingRoles, setCreatingRoles] = useState(false);
   const [result, setResult] = useState<ResultView | null>(null);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
@@ -512,6 +524,7 @@ export function PsaRoleSyncWorkspace() {
     setRoleSearch("");
     setMemberSearch("");
     setOverrideDrafts({});
+    setCheckedRoleIds(new Set());
     const conn = connections.find((c) => c.psa_type === next);
     setConnForm(connFormFor(next, conn));
     setRightTab("connection");
@@ -542,18 +555,91 @@ export function PsaRoleSyncWorkspace() {
 
   // --- Role mapping ---
 
-  const setRoleMapping = (psaRoleId: string, csRoleId: string) => {
+  const setRoleMappings = (updates: Record<string, string>) => {
     // rolePriority follows the on-screen order: it decides which role wins when a member holds two.
     const next: Record<string, string> = {};
     const priority: string[] = [];
     for (const role of discovery?.psaRoles || []) {
-      const value = role.id === psaRoleId ? csRoleId : config.roleMap[role.id];
+      const value = role.id in updates ? updates[role.id] : config.roleMap[role.id];
       if (value) {
         next[role.id] = value;
         priority.push(role.id);
       }
     }
     updateConfig({ roleMap: next, rolePriority: priority });
+  };
+
+  const setRoleMapping = (psaRoleId: string, csRoleId: string) => {
+    if (csRoleId === CREATE_ROLE) {
+      openCreateDialog([psaRoleId]);
+      return;
+    }
+    setRoleMappings({ [psaRoleId]: csRoleId });
+  };
+
+  // --- Creating ScalePad roles from PSA roles ---
+
+  const openCreateDialog = (ids: string[]) => {
+    setCreateDialogIds(ids);
+    setPendingCreate(ids);
+  };
+
+  const csRoleNamed = (name: string) => discovery?.csRoles.find((r) => sameLabel(r.label, name));
+  const psaRoleName = (id: string) => discovery?.psaRoles.find((r) => r.id === id)?.name || id;
+
+  const toggleRoleCheck = (id: string) =>
+    setCheckedRoleIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const allRolesOnPageChecked = rolesPaged.rows.length > 0 && rolesPaged.rows.every((r) => checkedRoleIds.has(r.id));
+  const toggleRolePage = () =>
+    setCheckedRoleIds((prev) => {
+      const next = new Set(prev);
+      for (const r of rolesPaged.rows) {
+        if (allRolesOnPageChecked) next.delete(r.id);
+        else next.add(r.id);
+      }
+      return next;
+    });
+
+  const handleCreateRoles = async () => {
+    const ids = pendingCreate || [];
+    setPendingCreate(null);
+    if (!ids.length || !discovery) return;
+    setCreatingRoles(true);
+    try {
+      const { results, csRoles } = await createCsRoles(ids.map(psaRoleName));
+      setDiscovery((d) => (d ? { ...d, csRoles } : d));
+      const updates: Record<string, string> = {};
+      const failed: string[] = [];
+      let created = 0;
+      let reused = 0;
+      for (const id of ids) {
+        const result = results.find((r) => sameLabel(r.label, psaRoleName(id)));
+        if (result?.id) {
+          updates[id] = result.id;
+          if (result.created) created++;
+          else reused++;
+        } else {
+          failed.push(`${psaRoleName(id)}${result?.error ? `: ${result.error}` : ""}`);
+        }
+      }
+      if (Object.keys(updates).length) setRoleMappings(updates);
+      setCheckedRoleIds(new Set());
+      if (created || reused) {
+        toast.success(
+          [created ? `Created ${created} ScalePad role(s)` : "", reused ? `${reused} already existed and were mapped` : ""].filter(Boolean).join("; "),
+        );
+      }
+      if (failed.length) toast.error(`Couldn't create: ${failed.join("; ")}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingRoles(false);
+    }
   };
 
   // --- Overrides ---
@@ -753,22 +839,43 @@ export function PsaRoleSyncWorkspace() {
     if (leftTab === "roles") {
       return (
         <>
+          <div className="flex items-center justify-between gap-2 px-4 py-1.5 border-b border-border bg-surface-raised">
+            <div className="flex items-center gap-2">
+              <Checkbox checked={allRolesOnPageChecked} onCheckedChange={toggleRolePage} className="h-3.5 w-3.5" />
+              <span className="text-[10px] text-muted-foreground">Select all on page</span>
+            </div>
+            {checkedRoleIds.size > 0 && (
+              <button
+                onClick={() => openCreateDialog([...checkedRoleIds])}
+                disabled={creatingRoles}
+                className="text-[11px] bg-primary/15 text-primary hover:bg-primary/25 px-2 py-0.5 rounded-md font-medium flex items-center gap-1 disabled:opacity-40"
+              >
+                {creatingRoles ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                Create in ScalePad ({checkedRoleIds.size})
+              </button>
+            )}
+          </div>
           <div className="flex-1 overflow-y-auto">
             {rolesPaged.rows.length === 0 ? (
               <EmptyRow>No {psaName} roles found.</EmptyRow>
             ) : (
               rolesPaged.rows.map((role) => (
                 <div key={role.id} className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border">
-                  <span className="text-xs font-medium text-foreground truncate">{role.name}</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Checkbox checked={checkedRoleIds.has(role.id)} onCheckedChange={() => toggleRoleCheck(role.id)} className="h-3.5 w-3.5" />
+                    <span className="text-xs font-medium text-foreground truncate">{role.name}</span>
+                  </div>
                   <select
                     value={config.roleMap[role.id] || ""}
                     onChange={(e) => setRoleMapping(role.id, e.target.value)}
-                    className={`${selectClass} w-44 ${config.roleMap[role.id] ? "border-primary/60" : ""}`}
+                    disabled={creatingRoles}
+                    className={`${selectClass} w-44 shrink-0 ${config.roleMap[role.id] ? "border-primary/60" : ""}`}
                   >
                     <option value="">Don't sync</option>
                     {discovery.csRoles.map((r) => (
                       <option key={r.id} value={r.id}>{r.label}</option>
                     ))}
+                    {!csRoleNamed(role.name) && <option value={CREATE_ROLE}>+ Create "{role.name}" in ScalePad</option>}
                   </select>
                 </div>
               ))
@@ -1145,6 +1252,35 @@ export function PsaRoleSyncWorkspace() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => handleRun("live")}>Run live</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!pendingCreate} onOpenChange={(open) => !open && setPendingCreate(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Create {createDialogIds.length === 1 ? "this role" : `${createDialogIds.length} roles`} in ScalePad?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  New account team roles are added to ScalePad CS with the same names as your {psaName} roles, and mapped here. Names that
+                  already exist in ScalePad are reused, not duplicated. Existing roles aren't changed.
+                </p>
+                <ul className="list-disc pl-5 text-foreground">
+                  {createDialogIds.slice(0, 12).map((id) => (
+                    <li key={id}>
+                      {psaRoleName(id)}
+                      {csRoleNamed(psaRoleName(id)) ? " (already exists, will be mapped)" : ""}
+                    </li>
+                  ))}
+                  {createDialogIds.length > 12 && <li>and {createDialogIds.length - 12} more</li>}
+                </ul>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleCreateRoles}>Create</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

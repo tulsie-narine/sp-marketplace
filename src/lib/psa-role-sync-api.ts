@@ -197,7 +197,16 @@ export const deletePsaConnection = (psaType: PsaType) => callSync<{ connected: b
 export const discoverPsa = (psaType: PsaType, emailOverrides: Record<string, string>) =>
   callSync<Discovery>("discover", { psaType, emailOverrides });
 
-export const runPsaRoleSync = (taskId: string, mode: "dry-run" | "live") => callSync<RunResult>("run", { taskId, mode });
+export type CreatedRoleResult = { label: string; id: string | null; created: boolean; error?: string };
+
+/**
+ * Creates ScalePad CS account team roles from PSA role names. A name matching an existing CS role
+ * (ignoring case) reuses it instead. Returns a result per name plus the updated CS role list.
+ */
+export const createCsRoles = (labels: string[]) =>
+  callSync<{ results: CreatedRoleResult[]; csRoles: Array<{ id: string; label: string }> }>("roles.create", { labels });
+
+export const runPsaRoleSync =(taskId: string, mode: "dry-run" | "live") => callSync<RunResult>("run", { taskId, mode });
 
 export const listPsaRoleSyncRuns = async (taskId: string) => (await callSync<{ data: RunRecord[] }>("runs.list", { taskId })).data || [];
 

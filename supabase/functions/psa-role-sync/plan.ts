@@ -360,6 +360,17 @@ export function buildHaloTeamEntries(clients: Array<{ id: string; name: string; 
   return entries;
 }
 
+/** Tidy a PSA role name for use as a ScalePad role label: trimmed, single spaces, at most 100 characters. */
+export function cleanRoleLabel(label: string) {
+  return label.replace(/\s+/g, " ").trim().slice(0, 100);
+}
+
+/** The existing CS role with this label, ignoring case and spacing, so creating a role never duplicates one. */
+export function findRoleByLabel(roles: CsRole[], label: string): CsRole | undefined {
+  const wanted = cleanRoleLabel(label).toLowerCase();
+  return roles.find((role) => cleanRoleLabel(role.label).toLowerCase() === wanted);
+}
+
 /** True when a task is due, given its interval in days and last run time. */
 export function isDue(lastRunAt: string | null, intervalDays: number, now = Date.now()) {
   if (!lastRunAt) return true;

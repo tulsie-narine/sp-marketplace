@@ -4,6 +4,8 @@ import {
   batchActions,
   buildAutotaskTeamEntries,
   buildHaloTeamEntries,
+  cleanRoleLabel,
+  findRoleByLabel,
   HALO_SLOTS,
   buildPlan,
   isDue,
@@ -243,6 +245,18 @@ describe("buildHaloTeamEntries", () => {
       config: config({ roleMap: { accountmanagertech: "r-am", pritech: "r-tech" }, rolePriority: HALO_SLOTS.map((s) => s.id) }),
     });
     expect(result.actions).toEqual([expect.objectContaining({ userId: "u-alex", roleId: "r-am" })]);
+  });
+});
+
+describe("role labels", () => {
+  it("tidies PSA role names into ScalePad role labels", () => {
+    expect(cleanRoleLabel("  Help   Desk ")).toBe("Help Desk");
+    expect(cleanRoleLabel("x".repeat(150))).toHaveLength(100);
+  });
+
+  it("finds an existing ScalePad role ignoring case and spacing, so creation never duplicates", () => {
+    expect(findRoleByLabel(roles, "  account   MANAGER")?.id).toBe("r-am");
+    expect(findRoleByLabel(roles, "Help Desk")).toBeUndefined();
   });
 });
 

@@ -10,7 +10,7 @@
 //
 // Modes:
 //   - Manual (browser): x-scalepad-api-key header + { action, psaType?, ... }. Actions:
-//     connection.status, connection.save, connection.delete, discover, run, runs.list.
+//     connection.status, connection.save, connection.delete, discover, roles.create, run, runs.list.
 //   - Scheduled (pg_cron): { scheduled: true } with the service-role bearer token. Runs every
 //     enabled task whose interval (30 days by default) has passed.
 //
@@ -25,6 +25,8 @@ import {
   buildAutotaskTeamEntries,
   buildHaloTeamEntries,
   buildPlan,
+  cleanRoleLabel,
+  findRoleByLabel,
   HALO_SLOTS,
   isDue,
   matchMember,
@@ -168,6 +170,41 @@ async function loadScalePad(apiKey: string, brandPattern: RegExp) {
     .map((u) => ({ id: text(u.user_id), email: text(u.email), name: [u.first_name, u.last_name].filter(Boolean).join(" ").trim() }));
   const roles: CsRole[] = ((rolesResult.data || []) as ApiRow[]).map((r) => ({ id: text(r.account_team_member_role_id), label: text(r.role_label) }));
   return { clients, users, roles };
+}
+
+async function listCsRoles(apiKey: string): Promise<CsRole[]> {
+  const result = await spCall(apiKey, `${CS_PREFIX}/account-team/roles`);
+  return ((result.data || []) as ApiRow[]).map((r) => ({ id: text(r.account_team_member_role_id), label: text(r.role_label) }));
+}
+
+/**
+ * Creates CS account team roles for the given labels. A label that matches an existing role
+ * (ignoring case and spacing) reuses that role instead of creating a duplicate. Each label is
+ * handled on its own, so one failure doesn't stop the rest. Existing roles are never changed.
+ */
+async function createCsRoles(apiKey: string, labels: string[]) {
+  const roles = await listCsRoles(apiKey);
+  const results: Array<{ label: string; id: string | null; created: boolean; error?: string }> = [];
+  for (const raw of labels) {
+    const label = cleanRoleLabel(raw);
+    if (!label) continue;
+    const existing = findRoleByLabel(roles, label);
+    if (existing) {
+      results.push({ label: existing.label, id: existing.id, created: false });
+      continue;
+    }
+    try {
+      const created = await spCall(apiKey, `${CS_PREFIX}/account-team/member/role/create`, "POST", { role_label: label, is_primary: false });
+      const id = text(created.role_id);
+      if (!id) throw new Error("ScalePad did not return the new role's id");
+      roles.push({ id, label });
+      results.push({ label, id, created: true });
+    } catch (error) {
+      results.push({ label, id: null, created: false, error: errorMessage(error) });
+    }
+    await sleep(100);
+  }
+  return { results, csRoles: roles };
 }
 
 async function loadUserAssignments(apiKey: string, userId: string): Promise<CsAssignment[]> {
@@ -683,6 +720,11 @@ Deno.serve(async (req) => {
       }
       case "discover":
         return json(await discover(db, ownerHash, apiKey, psaType!, (body.emailOverrides as Record<string, string>) || {}));
+      case "roles.create": {
+        const labels = Array.isArray(body.labels) ? body.labels.map(text).slice(0, 100) : [];
+        if (!labels.length) return json({ error: "No role names given." }, 400);
+        return json(await createCsRoles(apiKey, labels));
+      }
       case "runs.list": {
         const { data, error } = await db.from("psa_role_sync_runs").select("*")
           .eq("owner_hash", ownerHash).eq("task_id", text(body.taskId)).order("started_at", { ascending: false }).limit(20);
