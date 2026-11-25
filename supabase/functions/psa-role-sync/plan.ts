@@ -61,7 +61,10 @@ export type SkipReason =
   | "role-not-mapped"
   | "role-missing-in-scalepad"
   | "duplicate-role"
-  | "role-conflict";
+  | "role-conflict"
+  | "field-value-unmatched"
+  | "segment-not-mapped"
+  | "segment-missing-in-scalepad";
 
 export type PlanSkip = {
   reason: SkipReason;
@@ -89,6 +92,9 @@ export const SKIP_LABELS: Record<SkipReason, string> = {
   "role-missing-in-scalepad": "Mapped ScalePad role no longer exists",
   "duplicate-role": "Member holds more than one mapped role on this company",
   "role-conflict": "Different role already set in ScalePad",
+  "field-value-unmatched": "Custom field value doesn't name a ScalePad user",
+  "segment-not-mapped": "Custom field value has no segment mapped",
+  "segment-missing-in-scalepad": "Mapped ScalePad segment no longer exists",
 };
 
 export const normalizeEmail = (value: string | null | undefined) => (value || "").trim().toLowerCase();
@@ -120,8 +126,11 @@ export function normalizeOverrides(overrides: Record<string, string> | undefined
   return out;
 }
 
-const memberLabel = (member: PsaMember | undefined, fallbackId: string) =>
-  member ? (member.name ? `${member.name} (${member.identifier})` : member.identifier) : `Member ${fallbackId}`;
+const memberLabel = (member: PsaMember | undefined, fallbackId: string) => {
+  if (!member) return `Member ${fallbackId}`;
+  if (member.id.startsWith(FIELD_VALUE_MEMBER_PREFIX)) return member.name;
+  return member.name ? `${member.name} (${member.identifier})` : member.identifier;
+};
 
 const userLabel = (user: CsUser) => user.name || user.email;
 
@@ -184,7 +193,16 @@ export function buildPlan(input: {
       continue;
     }
     if (match.status === "unmatched") {
-      skips.push({ reason: "member-not-in-scalepad", clientName: client.name, memberLabel: label, detail: match.email || "No email in the PSA" });
+      if (member.id.startsWith(FIELD_VALUE_MEMBER_PREFIX)) {
+        skips.push({
+          reason: "field-value-unmatched",
+          clientName: client.name,
+          memberLabel: member.name,
+          detail: `${mapped[0].teamRoleName}: matches no PSA member or ScalePad user. Add a ScalePad email for this value.`,
+        });
+      } else {
+        skips.push({ reason: "member-not-in-scalepad", clientName: client.name, memberLabel: label, detail: match.email || "No email in the PSA" });
+      }
       continue;
     }
     matched.add(match.user.id);
@@ -377,4 +395,172 @@ export function isDue(lastRunAt: string | null, intervalDays: number, now = Date
   const last = new Date(lastRunAt).getTime();
   if (Number.isNaN(last)) return true;
   return now - last >= intervalDays * 24 * 60 * 60 * 1000;
+}
+
+// ---------- ConnectWise custom fields ----------
+//
+// A custom field (UDF) on the ConnectWise company record can feed an account team role (its value
+// names a person) or the client's segment (its value names a segment). Custom fields have no
+// "member" type in ConnectWise, so a person field holds free text: usually a login ID or a name.
+
+/** A custom field value on one PSA company. */
+export type PsaFieldValue = { companyId: string; companyName: string; fieldId: string; caption: string; value: string };
+
+/** Team role id used for a custom field, so the role planner treats it like a PSA team role. */
+export const FIELD_ROLE_PREFIX = "field:";
+export const fieldRoleId = (fieldId: string) => `${FIELD_ROLE_PREFIX}${fieldId}`;
+
+/** Placeholder member id for a value that names no PSA member (an email override can still match it). */
+export const FIELD_VALUE_MEMBER_PREFIX = "value:";
+
+/** Lowercase with single spaces: the key for comparing and mapping custom field values. */
+export const normalizeValue = (value: string | null | undefined) => (value || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * The PSA member a custom field value names, by login ID, email, "First Last" or "Last, First".
+ * When several members share the name, a single active one wins; otherwise it's ambiguous.
+ */
+export function memberForValue(value: string, members: PsaMember[]): { member: PsaMember | null; ambiguous: boolean } {
+  const wanted = normalizeValue(value);
+  if (!wanted) return { member: null, ambiguous: false };
+  const keys = (m: PsaMember) => {
+    const parts = normalizeValue(m.name).split(" ");
+    const reversed = parts.length > 1 ? `${parts[parts.length - 1]}, ${parts.slice(0, -1).join(" ")}` : "";
+    return [normalizeValue(m.identifier), normalizeValue(m.email), normalizeValue(m.name), reversed].filter(Boolean);
+  };
+  const hits = members.filter((m) => keys(m).includes(wanted));
+  if (hits.length <= 1) return { member: hits[0] || null, ambiguous: false };
+  const active = hits.filter((m) => !m.inactive);
+  return active.length === 1 ? { member: active[0], ambiguous: false } : { member: null, ambiguous: true };
+}
+
+/** The placeholder member for a value, so an email override keyed by the value can match it. */
+export function valueMember(value: string): PsaMember {
+  const tidy = value.replace(/\s+/g, " ").trim();
+  return { id: `${FIELD_VALUE_MEMBER_PREFIX}${normalizeValue(value)}`, identifier: tidy, name: tidy, email: "", inactive: false };
+}
+
+/**
+ * Team entries from person custom fields, for buildPlan. A value with an email override, or one
+ * that names no single member, becomes a placeholder member; the planner then matches it by the
+ * override or reports it as "field-value-unmatched". Blank values are ignored.
+ */
+export function buildFieldTeamEntries(input: {
+  values: PsaFieldValue[];
+  fieldIds: string[];
+  members: PsaMember[];
+  overrides: Record<string, string>;
+}): { entries: PsaTeamEntry[]; extraMembers: PsaMember[] } {
+  const wanted = new Set(input.fieldIds);
+  const entries: PsaTeamEntry[] = [];
+  const extra = new Map<string, PsaMember>();
+  for (const v of input.values) {
+    if (!wanted.has(v.fieldId) || !normalizeValue(v.value)) continue;
+    const found = input.overrides[normalizeValue(v.value)] ? { member: null } : memberForValue(v.value, input.members);
+    let member = found.member;
+    if (!member) {
+      member = valueMember(v.value);
+      extra.set(member.id, member);
+    }
+    entries.push({ companyId: v.companyId, companyName: v.companyName, memberId: member.id, teamRoleId: fieldRoleId(v.fieldId), teamRoleName: v.caption });
+  }
+  return { entries, extraMembers: [...extra.values()] };
+}
+
+// ---------- Segments ----------
+
+export type CsSegment = { id: string; label: string };
+
+export type SegmentUpdate = {
+  clientId: string;
+  clientName: string;
+  segmentId: string;
+  segmentLabel: string;
+  previousLabel: string;
+  value: string;
+};
+
+/**
+ * The segment changes for linked clients, from one custom field. A blank value leaves the client's
+ * segment alone. A value maps to a segment through valueMap (normalized value -> segment id); an
+ * unmapped value is skipped and reported. A client already in the right segment is left unchanged.
+ */
+export function buildSegmentPlan(input: {
+  clients: CsClient[];
+  values: PsaFieldValue[];
+  fieldId: string;
+  valueMap: Record<string, string>;
+  segments: CsSegment[];
+  currentSegment: Map<string, string | null>;
+}): { updates: SegmentUpdate[]; unchanged: number; skips: PlanSkip[] } {
+  const segmentsById = new Map(input.segments.map((s) => [s.id, s]));
+  const valueByCompany = new Map<string, PsaFieldValue>();
+  for (const v of input.values) if (v.fieldId === input.fieldId && normalizeValue(v.value)) valueByCompany.set(v.companyId, v);
+  const updates: SegmentUpdate[] = [];
+  const skips: PlanSkip[] = [];
+  let unchanged = 0;
+  for (const client of input.clients) {
+    const v = client.psaCompanyId ? valueByCompany.get(client.psaCompanyId) : undefined;
+    if (!v) continue;
+    const label = `${v.caption}: ${v.value.trim()}`;
+    const segmentId = input.valueMap[normalizeValue(v.value)];
+    if (!segmentId) {
+      skips.push({ reason: "segment-not-mapped", clientName: client.name, memberLabel: label, detail: "Map this value to a segment on the Fields tab" });
+      continue;
+    }
+    const segment = segmentsById.get(segmentId);
+    if (!segment) {
+      skips.push({ reason: "segment-missing-in-scalepad", clientName: client.name, memberLabel: label, detail: `Mapped to a segment id that no longer exists (${segmentId})` });
+      continue;
+    }
+    const current = input.currentSegment.get(client.id) || null;
+    if (current === segment.id) {
+      unchanged++;
+      continue;
+    }
+    updates.push({
+      clientId: client.id,
+      clientName: client.name,
+      segmentId: segment.id,
+      segmentLabel: segment.label,
+      previousLabel: (current && segmentsById.get(current)?.label) || "Not assigned",
+      value: v.value.trim(),
+    });
+  }
+  return { updates, unchanged, skips };
+}
+
+/** Group segment updates into PATCH /clients calls: one segment across up to maxClients clients. */
+export function batchSegmentUpdates(updates: SegmentUpdate[], maxClients = 100) {
+  const bySegment = new Map<string, SegmentUpdate[]>();
+  for (const u of updates) bySegment.set(u.segmentId, [...(bySegment.get(u.segmentId) || []), u]);
+  const batches: Array<{ segmentId: string; clientIds: string[]; updates: SegmentUpdate[] }> = [];
+  for (const group of bySegment.values()) {
+    for (let i = 0; i < group.length; i += maxClients) {
+      const slice = group.slice(i, i + maxClients);
+      batches.push({ segmentId: slice[0].segmentId, clientIds: slice.map((u) => u.clientId), updates: slice });
+    }
+  }
+  return batches;
+}
+
+// ---------- Manual client links ----------
+
+/**
+ * Applies links the partner made by hand (ScalePad client id -> PSA company id) for clients the
+ * PSA integration didn't link. A manual link wins over lineage, so a wrong automatic link can be
+ * corrected. Each PSA company is linked to one client: a later duplicate is dropped.
+ */
+export function applyClientLinks(clients: CsClient[], links: Record<string, string> | undefined): CsClient[] {
+  const manual = Object.entries(links || {}).filter(([clientId, companyId]) => clientId && String(companyId || "").trim());
+  if (!manual.length) return clients;
+  const byClient = new Map(manual.map(([clientId, companyId]) => [clientId, String(companyId).trim()]));
+  const manuallyUsed = new Set(byClient.values());
+  return clients.map((c) => {
+    const linked = byClient.get(c.id);
+    if (linked) return { ...c, psaCompanyId: linked };
+    // A company now linked by hand to another client can't also stay linked here.
+    if (c.psaCompanyId && manuallyUsed.has(c.psaCompanyId)) return { ...c, psaCompanyId: null };
+    return c;
+  });
 }

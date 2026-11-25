@@ -28,6 +28,7 @@ import {
   X,
   ArrowLeftRight,
   Plus,
+  Link2,
 } from "lucide-react";
 import {
   CW_SITES,
@@ -37,6 +38,9 @@ import {
   deletePsaConnection,
   discoverPsa,
   emptyPsaRoleSyncConfig,
+  fieldRoleKey,
+  isFieldRoleKey,
+  valueKey,
   getPsaConnections,
   listPsaRoleSyncRuns,
   listPsaRoleSyncTasks,
@@ -45,6 +49,7 @@ import {
   runPsaRoleSync,
   savePsaConnection,
   savePsaRoleSyncTask,
+  type DiscoveredField,
   type DiscoveredMember,
   type Discovery,
   type PsaConnection,
@@ -71,6 +76,8 @@ const MEMBER_FILTERS = [
 ];
 /** Dropdown value for "create this PSA role in ScalePad". Not a real role id. */
 const CREATE_ROLE = "__create__";
+/** "Use as" value for the custom field that sets the client segment. */
+const USE_SEGMENT = "__segment__";
 
 const sameLabel = (a: string, b: string) => a.replace(/\s+/g, " ").trim().toLowerCase() === b.replace(/\s+/g, " ").trim().toLowerCase();
 
@@ -242,8 +249,9 @@ function PsaPicker({
 type ResultView = { mode: "dry-run" | "live"; status: string; startedAt: string; summary: Record<string, number>; details: Partial<RunDetails>; error?: string | null };
 
 function RunResults({ result, psaName }: { result: ResultView; psaName: string }) {
-  const [tab, setTab] = useState<"actions" | "skips" | "notInPsa" | "errors">("actions");
+  const [tab, setTab] = useState<"actions" | "segments" | "skips" | "notInPsa" | "errors">("actions");
   const actions = result.details.actions || [];
+  const segmentChanges = result.details.segmentChanges || [];
   const skips = result.details.skips || [];
   const notInPsa = result.details.notInPsa || [];
   const errors = result.details.errors || [];
@@ -254,6 +262,8 @@ function RunResults({ result, psaName }: { result: ResultView; psaName: string }
   const skipsPaged = usePaged(skips, tab);
   const notInPsaPaged = usePaged(notInPsa, tab);
   const errorsPaged = usePaged(errors, tab);
+  const segmentsPaged = usePaged(segmentChanges, tab);
+  const showSegments = segmentChanges.length > 0 || (s.segmentPlanned || 0) + (s.segmentUnchanged || 0) > 0;
 
   return (
     <div className="border border-border rounded-md overflow-hidden">
@@ -269,19 +279,27 @@ function RunResults({ result, psaName }: { result: ResultView; psaName: string }
           <XCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {result.error}
         </div>
       )}
-      <div className="grid grid-cols-4 gap-2 p-3 border-b border-border">
+      <div className={`grid ${showSegments ? "grid-cols-5" : "grid-cols-4"} gap-2 p-3 border-b border-border`}>
         <StatCard
           label={result.mode === "live" ? "Assigned" : "To assign"}
           value={result.mode === "live" ? s.applied || 0 : s.planned || 0}
           tone="text-success"
         />
-        <StatCard label="Already correct" value={s.unchanged || 0} />
+        {showSegments && (
+          <StatCard
+            label={result.mode === "live" ? "Segments set" : "Segments to set"}
+            value={result.mode === "live" ? s.segmentApplied || 0 : s.segmentPlanned || 0}
+            tone="text-success"
+          />
+        )}
+        <StatCard label="Already correct" value={(s.unchanged || 0) + (s.segmentUnchanged || 0)} />
         <StatCard label="Skipped" value={skipped} tone={skipped ? "text-warning" : "text-foreground"} />
         <StatCard label="Errors" value={s.errors || 0} tone={s.errors ? "text-destructive" : "text-foreground"} />
       </div>
       <TabBar<typeof tab>
         tabs={[
           ["actions", `${result.mode === "live" ? "Changes" : "Planned"} (${actions.length})`],
+          ...(showSegments ? ([["segments", `Segments (${segmentChanges.length})`]] as [typeof tab, string][]) : []),
           ["skips", `Skipped (${skips.length})`],
           ["notInPsa", `In ScalePad only (${notInPsa.length})`],
           ["errors", `Errors (${errors.length})`],
@@ -311,6 +329,28 @@ function RunResults({ result, psaName }: { result: ResultView; psaName: string }
               ))
             )}
             <Pagination page={actionsPaged.page} totalPages={actionsPaged.totalPages} onPageChange={actionsPaged.setPage} />
+          </>
+        )}
+        {tab === "segments" && (
+          <>
+            {segmentsPaged.rows.length === 0 ? (
+              <EmptyRow>No segment changes. Every client with a value is already in the right segment.</EmptyRow>
+            ) : (
+              segmentsPaged.rows.map((x, i) => (
+                <div key={`${x.clientName}-${i}`} className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border">
+                  <div className="min-w-0">
+                    <p className="text-xs text-foreground truncate">{x.clientName}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{psaName} value: {x.value}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="text-[10px] text-muted-foreground">{x.from} →</span>
+                    <Badge className="bg-primary/15 text-primary">{x.to}</Badge>
+                    {x.failed && <Badge className="bg-destructive/15 text-destructive">Failed</Badge>}
+                  </div>
+                </div>
+              ))
+            )}
+            <Pagination page={segmentsPaged.page} totalPages={segmentsPaged.totalPages} onPageChange={segmentsPaged.setPage} />
           </>
         )}
         {tab === "skips" && (
@@ -393,7 +433,10 @@ export function PsaRoleSyncWorkspace() {
   const [pendingSwitch, setPendingSwitch] = useState<PsaType | null>(null);
 
   // Left panel
-  const [leftTab, setLeftTab] = useState<"roles" | "members">("roles");
+  const [leftTab, setLeftTab] = useState<"roles" | "members" | "fields" | "clients">("roles");
+  const [fieldSearch, setFieldSearch] = useState("");
+  const [clientSearch, setClientSearch] = useState("");
+  const [linkDrafts, setLinkDrafts] = useState<Record<string, string>>({});
   const [roleSearch, setRoleSearch] = useState("");
   const [memberSearch, setMemberSearch] = useState("");
   const [memberFilter, setMemberFilter] = useState("all");
@@ -425,11 +468,11 @@ export function PsaRoleSyncWorkspace() {
     setDirty(true);
   };
 
-  const runDiscovery = useCallback(async (type: PsaType, overrides: Record<string, string>) => {
+  const runDiscovery = useCallback(async (type: PsaType, overrides: Record<string, string>, links: Record<string, string> = {}) => {
     setDiscovering(true);
     setDiscoverError(null);
     try {
-      setDiscovery(await discoverPsa(type, overrides));
+      setDiscovery(await discoverPsa(type, overrides, links));
     } catch (err) {
       setDiscovery(null);
       setDiscoverError(err instanceof Error ? err.message : String(err));
@@ -457,7 +500,7 @@ export function PsaRoleSyncWorkspace() {
         setConnForm(connFormFor(loadedConfig.psaType, conn));
         if (conn) {
           setRightTab("run");
-          runDiscovery(loadedConfig.psaType, loadedConfig.emailOverrides);
+          runDiscovery(loadedConfig.psaType, loadedConfig.emailOverrides, loadedConfig.clientLinks);
         }
       } catch (err) {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
@@ -492,6 +535,20 @@ export function PsaRoleSyncWorkspace() {
   }, [discovery, roleSearch]);
   const rolesPaged = usePaged(filteredRoles, roleSearch);
   const mappedCount = Object.values(config.roleMap).filter(Boolean).length;
+  const segmentOn = psaType === "connectwise" && !!config.segmentFieldId;
+  const canRun = mappedCount > 0 || segmentOn;
+
+  const filteredFields = useMemo(() => {
+    const q = fieldSearch.trim().toLowerCase();
+    return (discovery?.customFields || []).filter((f) => !q || f.caption.toLowerCase().includes(q));
+  }, [discovery, fieldSearch]);
+  const fieldsPaged = usePaged(filteredFields, fieldSearch);
+
+  const filteredUnlinked = useMemo(() => {
+    const q = clientSearch.trim().toLowerCase();
+    return (discovery?.clients.unlinked || []).filter((c) => !q || c.name.toLowerCase().includes(q));
+  }, [discovery, clientSearch]);
+  const unlinkedPaged = usePaged(filteredUnlinked, clientSearch);
 
   const filteredMembers = useMemo(() => {
     const q = memberSearch.trim().toLowerCase();
@@ -523,6 +580,10 @@ export function PsaRoleSyncWorkspace() {
     setResult(null);
     setRoleSearch("");
     setMemberSearch("");
+    setFieldSearch("");
+    setClientSearch("");
+    setLinkDrafts({});
+    setLeftTab("roles");
     setOverrideDrafts({});
     setCheckedRoleIds(new Set());
     const conn = connections.find((c) => c.psa_type === next);
@@ -543,12 +604,12 @@ export function PsaRoleSyncWorkspace() {
     }
     if (conn) {
       setRightTab("run");
-      runDiscovery(next, nextConfig.emailOverrides);
+      runDiscovery(next, nextConfig.emailOverrides, nextConfig.clientLinks);
     }
   };
 
   const handlePick = (next: PsaType) => {
-    const hasWork = mappedCount > 0 || Object.keys(config.emailOverrides).length > 0 || scheduleEnabled;
+    const hasWork = canRun || Object.keys(config.emailOverrides).length > 0 || Object.keys(config.clientLinks).length > 0 || scheduleEnabled;
     if (psaChosen && next !== psaType && hasWork) setPendingSwitch(next);
     else applyPsa(next);
   };
@@ -559,11 +620,13 @@ export function PsaRoleSyncWorkspace() {
     // rolePriority follows the on-screen order: it decides which role wins when a member holds two.
     const next: Record<string, string> = {};
     const priority: string[] = [];
-    for (const role of discovery?.psaRoles || []) {
-      const value = role.id in updates ? updates[role.id] : config.roleMap[role.id];
+    // Team roles first, then custom fields used as roles.
+    const ids = [...(discovery?.psaRoles || []).map((r) => r.id), ...(discovery?.customFields || []).map((f) => fieldRoleKey(f.id))];
+    for (const id of ids) {
+      const value = id in updates ? updates[id] : config.roleMap[id];
       if (value) {
-        next[role.id] = value;
-        priority.push(role.id);
+        next[id] = value;
+        priority.push(id);
       }
     }
     updateConfig({ roleMap: next, rolePriority: priority });
@@ -585,7 +648,10 @@ export function PsaRoleSyncWorkspace() {
   };
 
   const csRoleNamed = (name: string) => discovery?.csRoles.find((r) => sameLabel(r.label, name));
-  const psaRoleName = (id: string) => discovery?.psaRoles.find((r) => r.id === id)?.name || id;
+  const psaRoleName = (id: string) =>
+    isFieldRoleKey(id)
+      ? discovery?.customFields.find((f) => fieldRoleKey(f.id) === id)?.caption || id
+      : discovery?.psaRoles.find((r) => r.id === id)?.name || id;
 
   const toggleRoleCheck = (id: string) =>
     setCheckedRoleIds((prev) => {
@@ -652,7 +718,7 @@ export function PsaRoleSyncWorkspace() {
     const next = { ...config.emailOverrides, [overrideKey(m)]: target };
     updateConfig({ emailOverrides: next });
     setOverrideDrafts((d) => ({ ...d, [m.id]: "" }));
-    runDiscovery(psaType, next);
+    runDiscovery(psaType, next, config.clientLinks);
   };
 
   const removeOverride = (m: DiscoveredMember) => {
@@ -660,7 +726,80 @@ export function PsaRoleSyncWorkspace() {
     delete next[overrideKey(m)];
     delete next[m.identifier.toLowerCase()];
     updateConfig({ emailOverrides: next });
-    runDiscovery(psaType, next);
+    runDiscovery(psaType, next, config.clientLinks);
+  };
+
+  // --- Custom fields (ConnectWise) ---
+
+  const fieldUse = (f: DiscoveredField) =>
+    config.segmentFieldId === f.id ? USE_SEGMENT : config.roleMap[fieldRoleKey(f.id)] || "";
+
+  const setFieldUse = (f: DiscoveredField, use: string) => {
+    if (use === CREATE_ROLE) {
+      openCreateDialog([fieldRoleKey(f.id)]);
+      return;
+    }
+    if (use === USE_SEGMENT) {
+      // Values that exactly match a segment name are mapped straight away; the rest wait for a choice.
+      const segmentMap = { ...config.segmentMap };
+      for (const v of f.values) {
+        const same = discovery?.segments.find((seg) => sameLabel(seg.label, v.value));
+        if (!segmentMap[v.key] && same) segmentMap[v.key] = same.id;
+      }
+      const roleMap = { ...config.roleMap };
+      delete roleMap[fieldRoleKey(f.id)];
+      updateConfig({ segmentFieldId: f.id, segmentMap, roleMap, rolePriority: config.rolePriority.filter((id) => id !== fieldRoleKey(f.id)) });
+      return;
+    }
+    if (config.segmentFieldId === f.id) updateConfig({ segmentFieldId: "" });
+    setRoleMappings({ [fieldRoleKey(f.id)]: use });
+  };
+
+  const setSegmentForValue = (key: string, segmentId: string) => {
+    const segmentMap = { ...config.segmentMap };
+    if (segmentId) segmentMap[key] = segmentId;
+    else delete segmentMap[key];
+    updateConfig({ segmentMap });
+  };
+
+  const addValueOverride = (key: string) => {
+    const target = (overrideDrafts[`value:${key}`] || "").trim();
+    if (!target) return;
+    const next = { ...config.emailOverrides, [key]: target };
+    updateConfig({ emailOverrides: next });
+    setOverrideDrafts((d) => ({ ...d, [`value:${key}`]: "" }));
+    runDiscovery(psaType, next, config.clientLinks);
+  };
+
+  const removeValueOverride = (key: string) => {
+    const next = { ...config.emailOverrides };
+    delete next[key];
+    updateConfig({ emailOverrides: next });
+    runDiscovery(psaType, next, config.clientLinks);
+  };
+
+  // --- Manual client links ---
+
+  const companyLabel = (c: { id: string; name: string }) => `${c.name} (#${c.id})`;
+  const companyByLabel = useMemo(() => new Map((discovery?.psaCompanies || []).map((c) => [companyLabel(c), c])), [discovery]);
+
+  const linkClient = (clientId: string) => {
+    const company = companyByLabel.get((linkDrafts[clientId] || "").trim());
+    if (!company) {
+      toast.error(`Pick a ${psaName} company from the list.`);
+      return;
+    }
+    const clientLinks = { ...config.clientLinks, [clientId]: company.id };
+    updateConfig({ clientLinks });
+    setLinkDrafts((d) => ({ ...d, [clientId]: "" }));
+    runDiscovery(psaType, config.emailOverrides, clientLinks);
+  };
+
+  const unlinkClient = (clientId: string) => {
+    const clientLinks = { ...config.clientLinks };
+    delete clientLinks[clientId];
+    updateConfig({ clientLinks });
+    runDiscovery(psaType, config.emailOverrides, clientLinks);
   };
 
   // --- Save settings ---
@@ -688,8 +827,8 @@ export function PsaRoleSyncWorkspace() {
   };
 
   const handleScheduleToggle = async (enabled: boolean) => {
-    if (enabled && !mappedCount) {
-      toast.error(`Map at least one ${psaName} role before turning on the schedule.`);
+    if (enabled && !canRun) {
+      toast.error(`Map at least one ${psaName} role${psaType === "connectwise" ? " or custom field" : ""} before turning on the schedule.`);
       return;
     }
     try {
@@ -718,7 +857,7 @@ export function PsaRoleSyncWorkspace() {
       setConnections(conns);
       setConnForm(connFormFor(psaType, conns.find((c) => c.psa_type === psaType)));
       toast.success(`Connected to ${psaName}`);
-      runDiscovery(psaType, config.emailOverrides);
+      runDiscovery(psaType, config.emailOverrides, config.clientLinks);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     } finally {
@@ -745,8 +884,8 @@ export function PsaRoleSyncWorkspace() {
 
   const handleRun = async (mode: "dry-run" | "live") => {
     setConfirmLive(false);
-    if (!mappedCount) {
-      toast.error(`Map at least one ${psaName} role first.`);
+    if (!canRun) {
+      toast.error(`Map at least one ${psaName} role${psaType === "connectwise" ? " or custom field" : ""} first.`);
       return;
     }
     setRunning(mode);
@@ -757,7 +896,8 @@ export function PsaRoleSyncWorkspace() {
       setResult({ mode: res.mode, status: res.status, startedAt: new Date().toISOString(), summary: res.summary, details: res.details });
       const s = res.summary;
       if (res.status === "success") {
-        toast.success(mode === "live" ? `Assigned ${s.applied || 0} account role(s)` : `Dry run: ${s.planned || 0} assignment(s) to make`);
+        const segs = segmentOn ? `, ${mode === "live" ? s.segmentApplied || 0 : s.segmentPlanned || 0} segment change(s)` : "";
+        toast.success(mode === "live" ? `Assigned ${s.applied || 0} account role(s)${segs}` : `Dry run: ${s.planned || 0} assignment(s) to make${segs}`);
       } else {
         toast.warning(`Finished with ${s.errors || 0} error(s). See the Errors tab.`);
       }
@@ -835,6 +975,188 @@ export function PsaRoleSyncWorkspace() {
       );
     }
     if (!discovery) return null;
+
+    if (leftTab === "fields") {
+      return (
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex-1 overflow-y-auto">
+            {fieldsPaged.rows.length === 0 ? (
+              <EmptyRow>No ConnectWise company custom fields found.</EmptyRow>
+            ) : (
+              fieldsPaged.rows.map((f) => {
+                const use = fieldUse(f);
+                const asRole = !!use && use !== USE_SEGMENT;
+                const unmatched = f.values.filter((v) => v.status !== "matched").length;
+                return (
+                  <div key={f.id} className="px-4 py-2.5 border-b border-border space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-foreground truncate">{f.caption}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {f.values.length ? `${f.values.length} different value(s) on linked clients` : "No values on linked clients"}
+                          {asRole && unmatched ? ` · ${unmatched} not matched` : ""}
+                        </p>
+                      </div>
+                      <select
+                        value={use}
+                        onChange={(e) => setFieldUse(f, e.target.value)}
+                        disabled={creatingRoles}
+                        className={`${selectClass} w-44 shrink-0 ${use ? "border-primary/60" : ""}`}
+                      >
+                        <option value="">Don't sync</option>
+                        <option value={USE_SEGMENT}>
+                          Client segment{config.segmentFieldId && config.segmentFieldId !== f.id ? " (moves from other field)" : ""}
+                        </option>
+                        <optgroup label="Account team role">
+                          {discovery.csRoles.map((r) => (
+                            <option key={r.id} value={r.id}>{r.label}</option>
+                          ))}
+                          {!csRoleNamed(f.caption) && <option value={CREATE_ROLE}>+ Create "{f.caption}" in ScalePad</option>}
+                        </optgroup>
+                      </select>
+                    </div>
+                    {use && f.values.length > 0 && (
+                      <div className="rounded-md border border-border bg-surface-raised max-h-64 overflow-y-auto">
+                        {f.values.map((v) => (
+                          <div key={v.key} className="px-3 py-1.5 border-b border-border last:border-b-0 space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] text-foreground truncate">
+                                {v.value} <span className="text-muted-foreground">({v.count})</span>
+                              </span>
+                              {use === USE_SEGMENT ? (
+                                <select
+                                  value={config.segmentMap[v.key] || ""}
+                                  onChange={(e) => setSegmentForValue(v.key, e.target.value)}
+                                  className={`${selectClass} w-36 shrink-0 ${config.segmentMap[v.key] ? "border-primary/60" : "border-warning"}`}
+                                >
+                                  <option value="">Don't change</option>
+                                  {discovery.segments.map((seg) => (
+                                    <option key={seg.id} value={seg.id}>{seg.label}</option>
+                                  ))}
+                                </select>
+                              ) : v.status === "matched" ? (
+                                <Badge className="bg-success/15 text-success">{v.via === "override" ? "Matched (override)" : "Matched"}</Badge>
+                              ) : v.status === "inactive" ? (
+                                <Badge className="bg-muted text-muted-foreground">Inactive</Badge>
+                              ) : (
+                                <Badge className="bg-warning/15 text-warning">{v.memberName ? "No ScalePad user" : "Not matched"}</Badge>
+                              )}
+                            </div>
+                            {asRole && v.status === "matched" && (
+                              <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                                <span className="truncate">
+                                  {v.memberName ? `${v.memberName} → ` : "→ "}
+                                  {v.csEmail}
+                                </span>
+                                {v.via === "override" && !v.memberName && (
+                                  <button onClick={() => removeValueOverride(v.key)} className="hover:text-destructive flex items-center gap-0.5">
+                                    <X className="w-3 h-3" /> Remove
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                            {asRole && v.status === "unmatched" && (
+                              <>
+                                <p className="text-[10px] text-muted-foreground">
+                                  {v.ambiguous
+                                    ? `Several ${psaName} members share this name.`
+                                    : v.memberName
+                                      ? `${v.memberName} has no matching ScalePad user.`
+                                      : `Doesn't match a ${psaName} member's name, login or email.`}
+                                </p>
+                                <div className="flex gap-1.5">
+                                  <input
+                                    type="email"
+                                    placeholder="ScalePad email for this value"
+                                    value={overrideDrafts[`value:${v.key}`] || ""}
+                                    onChange={(e) => setOverrideDrafts((d) => ({ ...d, [`value:${v.key}`]: e.target.value }))}
+                                    onKeyDown={(e) => e.key === "Enter" && addValueOverride(v.key)}
+                                    className={`${inputClass} h-7 text-[11px]`}
+                                  />
+                                  <button
+                                    onClick={() => addValueOverride(v.key)}
+                                    disabled={!(overrideDrafts[`value:${v.key}`] || "").trim()}
+                                    className="text-[11px] px-2 rounded-md bg-primary/15 text-primary hover:bg-primary/25 disabled:opacity-40"
+                                  >
+                                    Match
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+          <Pagination page={fieldsPaged.page} totalPages={fieldsPaged.totalPages} onPageChange={fieldsPaged.setPage} />
+        </div>
+      );
+    }
+
+    if (leftTab === "clients") {
+      const listId = "psa-company-options";
+      return (
+        <div className="flex-1 flex flex-col min-h-0">
+          <datalist id={listId}>
+            {discovery.psaCompanies.map((c) => (
+              <option key={c.id} value={companyLabel(c)} />
+            ))}
+          </datalist>
+          <div className="flex-1 overflow-y-auto">
+            {discovery.clients.manual.length > 0 && (
+              <div className="border-b border-border">
+                <p className="px-4 pt-2 pb-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Linked by hand</p>
+                {discovery.clients.manual.map((m) => (
+                  <div key={m.clientId} className="flex items-center justify-between gap-2 px-4 py-1.5">
+                    <div className="min-w-0">
+                      <p className="text-xs text-foreground truncate">{m.clientName}</p>
+                      <p className="text-[10px] text-muted-foreground truncate">→ {m.companyName}</p>
+                    </div>
+                    <button onClick={() => unlinkClient(m.clientId)} className="text-[10px] text-muted-foreground hover:text-destructive flex items-center gap-0.5 shrink-0">
+                      <X className="w-3 h-3" /> Unlink
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {unlinkedPaged.rows.length === 0 ? (
+              <EmptyRow>{discovery.clients.unlinked.length ? "No clients match." : `Every ScalePad client is linked to a ${psaName} company.`}</EmptyRow>
+            ) : (
+              unlinkedPaged.rows.map((c) => (
+                <div key={c.id} className="px-4 py-2.5 border-b border-border space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-foreground truncate">{c.name}</p>
+                    <Badge className="bg-warning/15 text-warning">Not linked</Badge>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input
+                      list={listId}
+                      placeholder={`Type to find the ${psaName} company`}
+                      value={linkDrafts[c.id] || ""}
+                      onChange={(e) => setLinkDrafts((d) => ({ ...d, [c.id]: e.target.value }))}
+                      onKeyDown={(e) => e.key === "Enter" && linkClient(c.id)}
+                      className={`${inputClass} h-7 text-[11px]`}
+                    />
+                    <button
+                      onClick={() => linkClient(c.id)}
+                      disabled={!companyByLabel.has((linkDrafts[c.id] || "").trim())}
+                      className="text-[11px] px-2 rounded-md bg-primary/15 text-primary hover:bg-primary/25 disabled:opacity-40 flex items-center gap-1"
+                    >
+                      <Link2 className="w-3 h-3" /> Link
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <Pagination page={unlinkedPaged.page} totalPages={unlinkedPaged.totalPages} onPageChange={unlinkedPaged.setPage} />
+        </div>
+      );
+    }
 
     if (leftTab === "roles") {
       return (
@@ -999,11 +1321,11 @@ export function PsaRoleSyncWorkspace() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <h3 className="font-heading font-bold text-sm text-foreground">{psaName} Roles</h3>
-                {discovery && <Badge className="bg-primary/15 text-primary">{mappedCount} mapped</Badge>}
+                {discovery && <Badge className="bg-primary/15 text-primary">{mappedCount + (segmentOn ? 1 : 0)} mapped</Badge>}
               </div>
               {connection && (
                 <button
-                  onClick={() => runDiscovery(psaType, config.emailOverrides)}
+                  onClick={() => runDiscovery(psaType, config.emailOverrides, config.clientLinks)}
                   disabled={discovering}
                   className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 disabled:opacity-40"
                 >
@@ -1017,12 +1339,26 @@ export function PsaRoleSyncWorkspace() {
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
                   {leftTab === "roles" ? (
                     <input type="text" placeholder="Search roles…" value={roleSearch} onChange={(e) => setRoleSearch(e.target.value)} className={`${inputClass} pl-8`} />
+                  ) : leftTab === "fields" ? (
+                    <input type="text" placeholder="Search custom fields…" value={fieldSearch} onChange={(e) => setFieldSearch(e.target.value)} className={`${inputClass} pl-8`} />
+                  ) : leftTab === "clients" ? (
+                    <input type="text" placeholder="Search unlinked clients…" value={clientSearch} onChange={(e) => setClientSearch(e.target.value)} className={`${inputClass} pl-8`} />
                   ) : (
                     <input type="text" placeholder="Search members…" value={memberSearch} onChange={(e) => setMemberSearch(e.target.value)} className={`${inputClass} pl-8`} />
                   )}
                 </div>
                 {leftTab === "roles" ? (
                   <p className="text-[10px] text-muted-foreground">{psa.roleHelp}</p>
+                ) : leftTab === "fields" ? (
+                  <p className="text-[10px] text-muted-foreground">
+                    Use a company custom field as an account role (its value names a person) or as the client segment (each value maps to a
+                    segment). A blank value never changes anything. Role fields rank after the team roles when one person holds two.
+                  </p>
+                ) : leftTab === "clients" ? (
+                  <p className="text-[10px] text-muted-foreground">
+                    {discovery.clients.linked} of {discovery.clients.total} ScalePad clients are linked to a {psaName} company. Link the rest by
+                    hand so the sync can update them; your {psaName} integration links most clients on its own.
+                  </p>
                 ) : (
                   <div className="flex items-center gap-2">
                     <select value={memberFilter} onChange={(e) => setMemberFilter(e.target.value)} className={`${selectClass} flex-1`}>
@@ -1041,12 +1377,21 @@ export function PsaRoleSyncWorkspace() {
           {discovery && (
             <TabBar<typeof leftTab>
               tabs={[
-                ["roles", `Role Mapping (${discovery.psaRoles.length})`],
+                ["roles", `Roles (${discovery.psaRoles.length})`],
                 ["members", `Members (${discovery.members.length})`],
+                ...(psaType === "connectwise" ? ([["fields", `Fields (${discovery.customFields.length})`]] as [typeof leftTab, string][]) : []),
+                ["clients", `Unlinked (${discovery.clients.unlinked.length})`],
               ]}
               active={leftTab}
               onChange={setLeftTab}
             />
+          )}
+          {discovery && discovery.warnings.length > 0 && (
+            <div className="px-4 py-2 border-b border-border text-[10px] text-warning space-y-0.5">
+              {discovery.warnings.map((w) => (
+                <p key={w} className="flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" /> {w}</p>
+              ))}
+            </div>
           )}
           {leftBody()}
         </div>
@@ -1167,19 +1512,19 @@ export function PsaRoleSyncWorkspace() {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => handleRun("dry-run")}
-                        disabled={!!running || !mappedCount}
+                        disabled={!!running || !canRun}
                         className="h-8 px-4 rounded-md border border-border text-xs font-medium text-foreground flex items-center gap-1.5 hover:bg-surface-raised disabled:opacity-40"
                       >
                         {running === "dry-run" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />} Dry run
                       </button>
                       <button
                         onClick={() => setConfirmLive(true)}
-                        disabled={!!running || !mappedCount}
+                        disabled={!!running || !canRun}
                         className="h-8 px-4 rounded-md bg-primary text-primary-foreground text-xs font-medium flex items-center gap-1.5 hover:bg-primary/90 disabled:opacity-40"
                       >
                         {running === "live" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />} Run live
                       </button>
-                      {!mappedCount && <span className="text-[10px] text-muted-foreground">Map at least one role to run.</span>}
+                      {!canRun && <span className="text-[10px] text-muted-foreground">Map at least one role{psaType === "connectwise" ? " or custom field" : ""} to run.</span>}
                     </div>
                     {running && (
                       <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
@@ -1246,7 +1591,9 @@ export function PsaRoleSyncWorkspace() {
             <AlertDialogTitle>Run the sync live?</AlertDialogTitle>
             <AlertDialogDescription>
               This assigns matched {psaName} team members to their ScalePad clients with the mapped account roles. It only adds assignments
-              {config.overwriteRoles ? " and replaces different roles" : ""}; nobody is removed. Run a dry run first if you haven't.
+              {config.overwriteRoles ? " and replaces different roles" : ""}; nobody is removed.
+              {segmentOn ? " It also sets each client's segment from the mapped custom field, replacing the current segment; clients with a blank value are left alone." : ""}{" "}
+              Run a dry run first if you haven't.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

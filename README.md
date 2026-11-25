@@ -15,7 +15,7 @@ The marketplace ships with eight registered apps:
 | **Client Clean Up** | Utilities | Permanently removes selected Lifecycle Manager data for selected clients by object type. |
 | **ControlMap to LMX Workstream Sync** | Reporting | Reviews ControlMap risks and action items, then syncs selected priorities into Lifecycle Manager initiatives or action items. |
 | **LCM Data Reset** | Utilities | Runs a controlled Lifecycle Manager reset workflow based on the tenant migration and cleanup orchestration. |
-| **PSA Role Sync** | Utilities | Maps ConnectWise, Autotask or HaloPSA team roles to ScalePad CS account roles and assigns matching team members to each client, on a monthly schedule. |
+| **PSA Role Sync** | Utilities | Maps ConnectWise, Autotask or HaloPSA team roles (and ConnectWise company custom fields) to ScalePad CS account roles and client segments, and assigns matching team members to each client, on a monthly schedule. |
 
 All eight apps are seeded in [`src/lib/mock-data.ts`](src/lib/mock-data.ts). App metadata includes the name, description, category, status, version, API endpoint, and workspace type. New apps can be added from the admin area and are persisted in the browser under the `sp_apps` key.
 
@@ -103,15 +103,18 @@ Scheduled runs need a daily pg_cron job that calls the function with the service
 
 The user first picks their PSA: ConnectWise, Autotask or HaloPSA. How a run works:
 
-1. Reads ScalePad clients and takes each client's PSA company ID from `record_lineage`, matched on the vendor's brand name.
+1. Reads ScalePad clients and takes each client's PSA company ID from `record_lineage`, matched on the vendor's brand name. Clients the integration didn't link can be linked by hand on the Unlinked tab (saved as `clientLinks`); a manual link wins over lineage.
 2. Reads the PSA's members and the team of every linked client:
    - **ConnectWise:** each company's Team tab, where every member has a team role.
    - **Autotask:** Company Teams have no role, so the company's Account Manager (`ownerResourceID`) gets an "Account Manager (company owner)" role, and each Company Team member gets their default Autotask role (`ResourceRoleDepartments.isDefault`).
    - **HaloPSA:** there is no client team list. Each client's three agent slots, `accountmanagertech`, `pritech` and `sectech`, are the roles (Account Manager, Primary Technician, Secondary Technician). Client reads are paced to stay under Halo's 700 requests per 5 minutes.
 3. Matches members to ScalePad users by email, or by an override set in the Members tab.
 4. Assigns each matched member to the client's account team with the mapped role (`PUT /app/v1/clients/account-team`).
+5. **ConnectWise custom fields** (Fields tab) can also be used:
+   - **As an account role:** the field's value names a person (login ID, email, "First Last" or "Last, First"). It is matched to a ConnectWise member and then a ScalePad user, or to a ScalePad email set for that value. Field roles share the role priority with team roles.
+   - **As the client segment:** each value maps to a ScalePad segment (`GET /app/v1/segments`); values that match a segment name map themselves. Current segments come from `GET /app/v1/clients`, and changes are sent in bulk with `PATCH /app/v1/clients` (`client_ids`, `segment_id`). This replaces the client's current segment; a blank value leaves it alone.
 
-The sync only adds assignments. Unmatched members, unmapped roles, role conflicts and per-client failures are reported in the run, so they never stop it. The matching and planning logic lives in `supabase/functions/psa-role-sync/plan.ts`, and its tests are in `src/lib/psa-role-sync-plan.test.ts`.
+The sync only adds account team assignments. Unmatched members, unmapped roles, role conflicts and per-client failures are reported in the run, so they never stop it. The matching and planning logic lives in `supabase/functions/psa-role-sync/plan.ts`, and its tests are in `src/lib/psa-role-sync-plan.test.ts`.
 
 ## Routes
 

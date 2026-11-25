@@ -10,6 +10,13 @@ import {
   buildPlan,
   isDue,
   psaCompanyIdFromLineage,
+  applyClientLinks,
+  batchSegmentUpdates,
+  buildFieldTeamEntries,
+  buildSegmentPlan,
+  fieldRoleId,
+  memberForValue,
+  type PsaFieldValue,
   type CsAssignment,
   type PlanConfig,
   type PsaMember,
@@ -266,5 +273,141 @@ describe("isDue", () => {
     expect(isDue(null, 30, now)).toBe(true);
     expect(isDue("2026-10-20T00:00:00Z", 30, now)).toBe(true);
     expect(isDue("2026-11-10T00:00:00Z", 30, now)).toBe(false);
+  });
+});
+
+describe("ConnectWise custom fields", () => {
+  const field = (companyId: string, fieldId: string, caption: string, value: string): PsaFieldValue => ({
+    companyId,
+    companyName: companyId === "100" ? "Contoso" : "Fabrikam",
+    fieldId,
+    caption,
+    value,
+  });
+
+  it("finds the member a value names by login, email, name or Last, First", () => {
+    expect(memberForValue("asmith", members).member?.id).toBe("1");
+    expect(memberForValue("BO@msp.example", members).member?.id).toBe("2");
+    expect(memberForValue("  alex   smith ", members).member?.id).toBe("1");
+    expect(memberForValue("Smith, Alex", members).member?.id).toBe("1");
+    expect(memberForValue("Nobody Here", members).member).toBeNull();
+    expect(memberForValue("", members).member).toBeNull();
+  });
+
+  it("prefers the one active member when a name is shared, else reports it as ambiguous", () => {
+    const twins: PsaMember[] = [
+      { id: "a", identifier: "jlee1", name: "Jo Lee", email: "jo1@x", inactive: true },
+      { id: "b", identifier: "jlee2", name: "Jo Lee", email: "jo2@x", inactive: false },
+    ];
+    expect(memberForValue("Jo Lee", twins).member?.id).toBe("b");
+    const both = twins.map((m) => ({ ...m, inactive: false }));
+    expect(memberForValue("Jo Lee", both)).toEqual({ member: null, ambiguous: true });
+  });
+
+  it("turns person fields into role entries the planner assigns like team roles", () => {
+    const values = [
+      field("100", "7", "Strategic Advisor", "Alex Smith"),
+      field("200", "7", "Strategic Advisor", "Mystery Person"),
+      field("200", "9", "Customer Segment", "Gold"),
+      field("100", "8", "Technical Alignment", ""),
+    ];
+    const { entries, extraMembers } = buildFieldTeamEntries({ values, fieldIds: ["7", "8"], members, overrides: {} });
+    expect(entries.map((e) => [e.companyId, e.memberId, e.teamRoleId])).toEqual([
+      ["100", "1", "field:7"],
+      ["200", "value:mystery person", "field:7"],
+    ]);
+    const plan = buildPlan({
+      members: [...members, ...extraMembers],
+      teams: entries,
+      users,
+      clients,
+      roles,
+      assignments: [],
+      config: { roleMap: { [fieldRoleId("7")]: "r-vcio" }, emailOverrides: {}, overwriteRoles: false },
+    });
+    expect(plan.actions.map((a) => [a.clientName, a.userId, a.roleLabel])).toEqual([["Contoso", "u-alex", "vCIO"]]);
+    expect(plan.skips).toEqual([
+      expect.objectContaining({ reason: "field-value-unmatched", clientName: "Fabrikam", memberLabel: "Mystery Person" }),
+    ]);
+  });
+
+  it("matches a value through an email override keyed by the value", () => {
+    const values = [field("200", "7", "Strategic Advisor", "Mystery  Person")];
+    const overrides = { "mystery person": "di@msp.example" };
+    const { entries, extraMembers } = buildFieldTeamEntries({ values, fieldIds: ["7"], members, overrides });
+    const plan = buildPlan({
+      members: [...members, ...extraMembers],
+      teams: entries,
+      users,
+      clients,
+      roles,
+      assignments: [],
+      config: { roleMap: { "field:7": "r-vcio" }, emailOverrides: overrides, overwriteRoles: false },
+    });
+    expect(plan.actions.map((a) => [a.clientName, a.userId])).toEqual([["Fabrikam", "u-di"]]);
+  });
+
+  it("lets a field role and a team role on the same person follow the role priority", () => {
+    const values = [field("100", "7", "Strategic Advisor", "asmith")];
+    const { entries } = buildFieldTeamEntries({ values, fieldIds: ["7"], members, overrides: {} });
+    const plan = buildPlan({
+      members,
+      teams: [team("100", "1", "11", "Account Manager"), ...entries],
+      users,
+      clients,
+      roles,
+      assignments: [],
+      config: { roleMap: { "11": "r-am", "field:7": "r-vcio" }, rolePriority: ["field:7", "11"], emailOverrides: {}, overwriteRoles: false },
+    });
+    expect(plan.actions.map((a) => a.roleLabel)).toEqual(["vCIO"]);
+    expect(plan.skips[0]).toEqual(expect.objectContaining({ reason: "duplicate-role" }));
+  });
+});
+
+describe("segments", () => {
+  const segments = [
+    { id: "s-gold", label: "Strategic" },
+    { id: "s-std", label: "Standard" },
+  ];
+  const values: PsaFieldValue[] = [
+    { companyId: "100", companyName: "Contoso", fieldId: "9", caption: "Customer Segment", value: "Gold" },
+    { companyId: "200", companyName: "Fabrikam", fieldId: "9", caption: "Customer Segment", value: "Bronze" },
+  ];
+
+  it("plans segment changes, leaves blank and matching clients alone, and reports unmapped values", () => {
+    const plan = buildSegmentPlan({
+      clients: [...clients, { id: "c-4", name: "Blank Co", psaCompanyId: "400" }],
+      values,
+      fieldId: "9",
+      valueMap: { gold: "s-gold" },
+      segments,
+      currentSegment: new Map([["c-1", null]]),
+    });
+    expect(plan.updates).toEqual([
+      { clientId: "c-1", clientName: "Contoso", segmentId: "s-gold", segmentLabel: "Strategic", previousLabel: "Not assigned", value: "Gold" },
+    ]);
+    expect(plan.skips.map((s) => [s.reason, s.clientName])).toEqual([["segment-not-mapped", "Fabrikam"]]);
+
+    const again = buildSegmentPlan({ clients, values, fieldId: "9", valueMap: { gold: "s-gold", bronze: "s-std" }, segments, currentSegment: new Map([["c-1", "s-gold"], ["c-2", "s-gold"]]) });
+    expect(again.unchanged).toBe(1);
+    expect(again.updates.map((u) => [u.clientName, u.previousLabel, u.segmentLabel])).toEqual([["Fabrikam", "Strategic", "Standard"]]);
+  });
+
+  it("reports a value mapped to a deleted segment", () => {
+    const plan = buildSegmentPlan({ clients, values, fieldId: "9", valueMap: { gold: "s-gone", bronze: "s-std" }, segments, currentSegment: new Map() });
+    expect(plan.skips.map((s) => s.reason)).toEqual(["segment-missing-in-scalepad"]);
+  });
+
+  it("batches segment updates per segment, at most 100 clients a call", () => {
+    const many = Array.from({ length: 150 }, (_, i) => ({ clientId: `c${i}`, clientName: `C${i}`, segmentId: i < 120 ? "a" : "b", segmentLabel: "", previousLabel: "", value: "" }));
+    expect(batchSegmentUpdates(many).map((b) => [b.segmentId, b.clientIds.length])).toEqual([["a", 100], ["a", 20], ["b", 30]]);
+  });
+});
+
+describe("manual client links", () => {
+  it("links unlinked clients and moves a company linked by hand away from its old client", () => {
+    const linked = applyClientLinks(clients, { "c-3": "200" });
+    expect(linked.map((c) => [c.id, c.psaCompanyId])).toEqual([["c-1", "100"], ["c-2", null], ["c-3", "200"]]);
+    expect(applyClientLinks(clients, {})).toBe(clients);
   });
 });

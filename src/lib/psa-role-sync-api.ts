@@ -22,7 +22,19 @@ export type PsaRoleSyncConfig = {
   emailOverrides: Record<string, string>;
   overwriteRoles: boolean;
   syncIntervalDays: 7 | 14 | 30;
+  /** ConnectWise only: the custom field whose value sets each client's segment ("" = off). */
+  segmentFieldId: string;
+  /** Custom field value (lowercase, single spaces) -> ScalePad segment id. */
+  segmentMap: Record<string, string>;
+  /** ScalePad client id -> PSA company id, for clients the PSA integration didn't link. */
+  clientLinks: Record<string, string>;
 };
+
+/** roleMap key for a ConnectWise custom field used as an account role. */
+export const fieldRoleKey = (fieldId: string) => `field:${fieldId}`;
+export const isFieldRoleKey = (key: string) => key.startsWith("field:");
+/** The key a custom field value is mapped and matched by: lowercase with single spaces. */
+export const valueKey = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
 
 export const emptyPsaRoleSyncConfig = (psaType: PsaType = "connectwise"): PsaRoleSyncConfig => ({
   psaType,
@@ -31,6 +43,9 @@ export const emptyPsaRoleSyncConfig = (psaType: PsaType = "connectwise"): PsaRol
   emailOverrides: {},
   overwriteRoles: false,
   syncIntervalDays: 30,
+  segmentFieldId: "",
+  segmentMap: {},
+  clientLinks: {},
 });
 
 // --- PSA catalog: what the picker shows and which connection fields each PSA needs ---
@@ -131,18 +146,45 @@ export type DiscoveredMember = {
   csEmail: string | null;
 };
 
+export type DiscoveredFieldValue = {
+  key: string;
+  value: string;
+  /** Linked clients with this value. */
+  count: number;
+  /** The PSA member the value names, if any. */
+  memberName: string | null;
+  ambiguous: boolean;
+  status: "matched" | "inactive" | "unmatched";
+  via: "email" | "override" | null;
+  csEmail: string | null;
+};
+
+export type DiscoveredField = { id: string; caption: string; values: DiscoveredFieldValue[] };
+
 export type Discovery = {
   psaType: PsaType;
   psaRoles: Array<{ id: string; name: string }>;
   csRoles: Array<{ id: string; label: string }>;
+  segments: Array<{ id: string; label: string }>;
+  /** ConnectWise company custom fields; empty for other PSAs. */
+  customFields: DiscoveredField[];
+  warnings: string[];
   members: DiscoveredMember[];
-  clients: { total: number; linked: number; unlinked: string[] };
+  clients: {
+    total: number;
+    linked: number;
+    unlinked: Array<{ id: string; name: string }>;
+    manual: Array<{ clientId: string; clientName: string; companyId: string; companyName: string }>;
+  };
+  /** PSA companies not linked to any ScalePad client, for manual linking. */
+  psaCompanies: Array<{ id: string; name: string }>;
 };
 
 export type RunDetails = {
   actions: Array<{ kind: "assign" | "set-role" | "change-role"; clientName: string; userLabel: string; roleLabel: string; failed: boolean }>;
   skips: Array<{ reason: string; clientName: string; memberLabel: string; detail: string }>;
   notInPsa: Array<{ clientName: string; userLabel: string; roleLabel: string }>;
+  segmentChanges?: Array<{ clientName: string; value: string; from: string; to: string; failed: boolean }>;
   errors: string[];
 };
 
@@ -194,8 +236,8 @@ export const savePsaConnection = (psaType: PsaType, fields: Record<string, strin
 
 export const deletePsaConnection = (psaType: PsaType) => callSync<{ connected: boolean }>("connection.delete", { psaType });
 
-export const discoverPsa = (psaType: PsaType, emailOverrides: Record<string, string>) =>
-  callSync<Discovery>("discover", { psaType, emailOverrides });
+export const discoverPsa = (psaType: PsaType, emailOverrides: Record<string, string>, clientLinks: Record<string, string> = {}) =>
+  callSync<Discovery>("discover", { psaType, emailOverrides, clientLinks });
 
 export type CreatedRoleResult = { label: string; id: string | null; created: boolean; error?: string };
 
@@ -206,7 +248,7 @@ export type CreatedRoleResult = { label: string; id: string | null; created: boo
 export const createCsRoles = (labels: string[]) =>
   callSync<{ results: CreatedRoleResult[]; csRoles: Array<{ id: string; label: string }> }>("roles.create", { labels });
 
-export const runPsaRoleSync =(taskId: string, mode: "dry-run" | "live") => callSync<RunResult>("run", { taskId, mode });
+export const runPsaRoleSync = (taskId: string, mode: "dry-run" | "live") => callSync<RunResult>("run", { taskId, mode });
 
 export const listPsaRoleSyncRuns = async (taskId: string) => (await callSync<{ data: RunRecord[] }>("runs.list", { taskId })).data || [];
 
@@ -232,4 +274,7 @@ export const SKIP_REASON_LABELS: Record<string, string> = {
   "role-missing-in-scalepad": "Mapped role deleted",
   "duplicate-role": "Several mapped roles",
   "role-conflict": "Different role in ScalePad",
+  "field-value-unmatched": "Field value not matched",
+  "segment-not-mapped": "Segment not mapped",
+  "segment-missing-in-scalepad": "Mapped segment deleted",
 };

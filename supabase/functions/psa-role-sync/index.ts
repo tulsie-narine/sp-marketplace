@@ -7,6 +7,9 @@
 //     Company Team member gets their default Autotask role.
 //   - Halo: each client's three agent slots (Account Manager, Primary and Secondary Technician)
 //     act as the roles.
+// ConnectWise custom fields on the company record can also feed account roles (the value names a
+// person) and the client's segment (the value maps to a ScalePad segment). Clients the PSA
+// integration didn't link can be linked by hand (config.clientLinks).
 //
 // Modes:
 //   - Manual (browser): x-scalepad-api-key header + { action, psaType?, ... }. Actions:
@@ -19,9 +22,19 @@
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.0";
 import {
+  applyClientLinks,
   AUTOTASK_OWNER_ROLE_ID,
   AUTOTASK_OWNER_ROLE_NAME,
   batchActions,
+  batchSegmentUpdates,
+  buildFieldTeamEntries,
+  buildSegmentPlan,
+  FIELD_ROLE_PREFIX,
+  memberForValue,
+  normalizeValue,
+  valueMember,
+  type CsSegment,
+  type PsaFieldValue,
   buildAutotaskTeamEntries,
   buildHaloTeamEntries,
   buildPlan,
@@ -66,6 +79,12 @@ type Config = {
   emailOverrides?: Record<string, string>;
   overwriteRoles?: boolean;
   syncIntervalDays?: 7 | 14 | 30;
+  /** ConnectWise custom field whose value sets the client's segment ("" = off). */
+  segmentFieldId?: string;
+  /** Normalized custom field value -> ScalePad segment id. */
+  segmentMap?: Record<string, string>;
+  /** ScalePad client id -> PSA company id, for clients the PSA integration didn't link. */
+  clientLinks?: Record<string, string>;
 };
 
 type TaskRow = { id: string; owner_hash: string; name: string; config: Config; schedule_enabled: boolean; last_run_at: string | null };
@@ -154,22 +173,44 @@ async function spFetchAll(apiKey: string, endpoint: string) {
   return all;
 }
 
-async function loadScalePad(apiKey: string, brandPattern: RegExp) {
+async function loadScalePad(apiKey: string, brandPattern: RegExp, clientLinks?: Record<string, string>) {
   const [rawClients, usersResult, rolesResult] = await Promise.all([
     spFetchAll(apiKey, "/core/v1/clients"),
     spCall(apiKey, `${CS_PREFIX}/users`),
     spCall(apiKey, `${CS_PREFIX}/account-team/roles`),
   ]);
-  const clients: CsClient[] = rawClients.map((c) => ({
+  const lineageClients: CsClient[] = rawClients.map((c) => ({
     id: text(c.id),
     name: text(c.name),
     psaCompanyId: psaCompanyIdFromLineage(c.record_lineage, brandPattern),
   }));
+  const clients = applyClientLinks(lineageClients, clientLinks);
   const users: CsUser[] = ((usersResult.data || []) as ApiRow[])
     .filter((u) => u.email)
     .map((u) => ({ id: text(u.user_id), email: text(u.email), name: [u.first_name, u.last_name].filter(Boolean).join(" ").trim() }));
   const roles: CsRole[] = ((rolesResult.data || []) as ApiRow[]).map((r) => ({ id: text(r.account_team_member_role_id), label: text(r.role_label) }));
-  return { clients, users, roles };
+  const autoLinked = new Set(lineageClients.filter((c) => c.psaCompanyId).map((c) => c.id));
+  return { clients, users, roles, autoLinked };
+}
+
+/** ScalePad segments, without the "Not assigned" placeholder. */
+async function loadSegments(apiKey: string): Promise<CsSegment[]> {
+  const result = await spCall(apiKey, `${CS_PREFIX}/segments`);
+  return ((result.data || []) as ApiRow[])
+    .filter((s) => s.segment_id && text(s.segment_id) !== "__EMPTY__")
+    .map((s) => ({ id: text(s.segment_id), label: text(s.title) }));
+}
+
+/** Each client's current segment id (null when none), from the CS client list. */
+async function loadCurrentSegments(apiKey: string) {
+  const rows = await spFetchAll(apiKey, `${CS_PREFIX}/clients`);
+  const current = new Map<string, string | null>();
+  for (const row of rows) {
+    const id = text(row.client?.client_id);
+    const segmentId = text(row.segment?.segment_id);
+    if (id) current.set(id, segmentId && segmentId !== "__EMPTY__" ? segmentId : null);
+  }
+  return current;
 }
 
 async function listCsRoles(apiKey: string): Promise<CsRole[]> {
@@ -216,6 +257,9 @@ async function loadUserAssignments(apiKey: string, userId: string): Promise<CsAs
 
 type LinkedCompany = { id: string; name: string };
 
+/** A PSA company for manual linking; ConnectWise companies also carry their custom field values. */
+type PsaCompany = { id: string; name: string; fields?: Array<{ id: string; caption: string; value: string }> };
+
 type PsaAdapter = {
   /** Matches the vendor brand name in a ScalePad client's record_lineage. */
   brandPattern: RegExp;
@@ -225,6 +269,8 @@ type PsaAdapter = {
   listTeamRoles: () => Promise<Array<{ id: string; name: string }>>;
   /** Team entries for the linked companies. A company that fails is reported, not thrown. */
   listTeams: (companies: LinkedCompany[]) => Promise<{ entries: PsaTeamEntry[]; errors: string[] }>;
+  /** Every active PSA company (for manual links and, on ConnectWise, custom fields). */
+  listCompanies: () => Promise<PsaCompany[]>;
 };
 
 // ConnectWise Manage: Basic auth (companyId+publicKey:privateKey) plus a clientId header.
@@ -285,6 +331,16 @@ function connectWiseAdapter(conn: Connection): PsaAdapter {
         await sleep(50);
       }
       return { entries, errors };
+    },
+    listCompanies: async () => {
+      const rows = await fetchAll("/company/companies?fields=id,name,customFields&conditions=deletedFlag=false&orderBy=name");
+      return rows.map((c) => ({
+        id: text(c.id),
+        name: text(c.name),
+        fields: ((c.customFields || []) as ApiRow[])
+          .filter((f) => f?.id != null && text(f.caption))
+          .map((f) => ({ id: text(f.id), caption: text(f.caption), value: typeof f.value === "object" ? "" : text(f.value) })),
+      }));
     },
   };
 }
@@ -377,6 +433,10 @@ function autotaskAdapter(conn: Connection): PsaAdapter {
       });
       return { entries, errors };
     },
+    listCompanies: async () =>
+      (await query("Companies", [{ op: "eq", field: "isActive", value: true }], ["id", "companyName"]))
+        .map((c) => ({ id: text(c.id), name: text(c.companyName) }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
   };
 }
 
@@ -442,6 +502,17 @@ function haloAdapter(conn: Connection): PsaAdapter {
       }
       return { entries: buildHaloTeamEntries(clients), errors };
     },
+    listCompanies: async () => {
+      const all: PsaCompany[] = [];
+      for (let page = 1; page <= 50; page++) {
+        const result = await call(`/Client?pageinate=true&page_size=500&page_no=${page}&includeinactive=false`);
+        const rows = (Array.isArray(result) ? result : result.clients || []) as ApiRow[];
+        all.push(...rows.map((c) => ({ id: text(c.id), name: text(c.name) })));
+        if (rows.length < 500) break;
+        await sleep(450);
+      }
+      return all.sort((a, b) => a.name.localeCompare(b.name));
+    },
   };
 }
 
@@ -498,16 +569,36 @@ async function runTask(db: Db, task: TaskRow, apiKey: string, mode: "dry-run" | 
   const errors: string[] = [];
   try {
     const psa = await requireAdapter(db, task.owner_hash, psaType);
-    const [sp, members] = await Promise.all([loadScalePad(apiKey, psa.brandPattern), psa.listMembers()]);
+    const [sp, psaMembers] = await Promise.all([loadScalePad(apiKey, psa.brandPattern, config.clientLinks), psa.listMembers()]);
     const linked = sp.clients.filter((c) => c.psaCompanyId);
+    const roleMap = config.roleMap || {};
+    const overrides = normalizeOverrides(config.emailOverrides);
 
-    // Team entries for every linked client. A company that fails is skipped, not fatal.
-    const teamResult = await psa.listTeams(linked.map((c) => ({ id: c.psaCompanyId!, name: c.name })));
-    const teams = teamResult.entries;
+    // ConnectWise custom fields: person fields mapped to roles, and the segment field.
+    const fieldIds = Object.keys(roleMap).filter((id) => id.startsWith(FIELD_ROLE_PREFIX) && roleMap[id]).map((id) => id.slice(FIELD_ROLE_PREFIX.length));
+    const segmentFieldId = psaType === "connectwise" ? text(config.segmentFieldId) : "";
+    const fieldValues: PsaFieldValue[] = [];
+    if (psaType === "connectwise" && (fieldIds.length || segmentFieldId)) {
+      const linkedNames = new Map(linked.map((c) => [c.psaCompanyId!, c.name]));
+      for (const company of await psa.listCompanies()) {
+        if (!linkedNames.has(company.id)) continue;
+        for (const f of company.fields || []) {
+          fieldValues.push({ companyId: company.id, companyName: linkedNames.get(company.id)!, fieldId: f.id, caption: f.caption, value: f.value });
+        }
+      }
+    }
+
+    // Team entries for every linked client, when a team role is mapped. A company that fails is skipped, not fatal.
+    const teamRolesMapped = Object.keys(roleMap).some((id) => !id.startsWith(FIELD_ROLE_PREFIX) && roleMap[id]);
+    const teamResult = teamRolesMapped
+      ? await psa.listTeams(linked.map((c) => ({ id: c.psaCompanyId!, name: c.name })))
+      : { entries: [] as PsaTeamEntry[], errors: [] as string[] };
     errors.push(...teamResult.errors);
+    const fieldTeams = buildFieldTeamEntries({ values: fieldValues, fieldIds, members: psaMembers, overrides });
+    const teams = [...teamResult.entries, ...fieldTeams.entries];
+    const members = [...psaMembers, ...fieldTeams.extraMembers];
 
     // Current CS assignments, read only for users who match a PSA member on some team.
-    const overrides = normalizeOverrides(config.emailOverrides);
     const usersByEmail = new Map(sp.users.map((u) => [normalizeEmail(u.email), u]));
     const membersById = new Map(members.map((m) => [m.id, m]));
     const userIdByMember = new Map<string, string>();
@@ -540,7 +631,7 @@ async function runTask(db: Db, task: TaskRow, apiKey: string, mode: "dry-run" | 
       roles: sp.roles,
       assignments,
       config: {
-        roleMap: config.roleMap || {},
+        roleMap,
         rolePriority: Array.isArray(config.rolePriority) ? config.rolePriority.map(text) : [],
         emailOverrides: overrides,
         overwriteRoles: config.overwriteRoles === true,
@@ -578,11 +669,39 @@ async function runTask(db: Db, task: TaskRow, apiKey: string, mode: "dry-run" | 
       }
     }
 
+    // Segments from the custom field. A blank value never changes a client's segment.
+    let segmentPlan: ReturnType<typeof buildSegmentPlan> = { updates: [], unchanged: 0, skips: [] };
+    let segmentsApplied = 0;
+    const failedSegments = new Set<string>();
+    if (segmentFieldId) {
+      try {
+        const [segments, currentSegment] = await Promise.all([loadSegments(apiKey), loadCurrentSegments(apiKey)]);
+        segmentPlan = buildSegmentPlan({ clients: linked, values: fieldValues, fieldId: segmentFieldId, valueMap: config.segmentMap || {}, segments, currentSegment });
+      } catch (error) {
+        errors.push(`Could not read ScalePad segments, so segments were skipped this run (${errorMessage(error)})`);
+      }
+      if (mode === "live") {
+        for (const batch of batchSegmentUpdates(segmentPlan.updates)) {
+          try {
+            await spCall(apiKey, `${CS_PREFIX}/clients`, "PATCH", { client_ids: batch.clientIds, segment_id: batch.segmentId });
+            segmentsApplied += batch.updates.length;
+          } catch (error) {
+            errors.push(`Segment ${batch.updates[0]?.segmentLabel}: update failed for ${batch.clientIds.length} client(s) (${errorMessage(error)})`);
+            for (const u of batch.updates) failedSegments.add(u.clientId);
+          }
+          await sleep(100);
+        }
+      }
+    }
+
     const summary = {
       ...plan.counts,
+      segmentPlanned: segmentPlan.updates.length,
+      segmentApplied: segmentsApplied,
+      segmentUnchanged: segmentPlan.unchanged,
       linkedClients: linked.length,
       unlinkedClients: sp.clients.length - linked.length,
-      psaMembers: members.length,
+      psaMembers: psaMembers.length,
       planned: plan.actions.length,
       applied,
       errors: errors.length,
@@ -596,11 +715,19 @@ async function runTask(db: Db, task: TaskRow, apiKey: string, mode: "dry-run" | 
         roleLabel: a.roleLabel,
         failed: failedActions.includes(`${a.clientName}:${a.userId}`),
       })),
-      skips: plan.skips.slice(0, DETAIL_LIMIT),
+      skips: [...plan.skips, ...segmentPlan.skips].slice(0, DETAIL_LIMIT),
+      segmentChanges: segmentPlan.updates.slice(0, DETAIL_LIMIT).map((u) => ({
+        clientName: u.clientName,
+        value: u.value,
+        from: u.previousLabel,
+        to: u.segmentLabel,
+        failed: failedSegments.has(u.clientId),
+      })),
       notInPsa: plan.notInPsa.slice(0, DETAIL_LIMIT),
       errors: errors.slice(0, DETAIL_LIMIT),
     };
-    const status = errors.length ? (mode === "live" && plan.actions.length && !applied ? "failed" : "partial") : "success";
+    const planned = plan.actions.length + segmentPlan.updates.length;
+    const status = errors.length ? (mode === "live" && planned && !applied && !segmentsApplied ? "failed" : "partial") : "success";
     await db.from("psa_role_sync_runs").update({ status, finished_at: new Date().toISOString(), summary, details }).eq("id", run.id);
     await db.from("scheduled_tasks").update({ last_run_at: new Date().toISOString(), last_run_status: status, last_run_summary: summary }).eq("id", task.id);
     return { task_id: task.id, run_id: run.id, mode, status, summary, details };
@@ -614,15 +741,81 @@ async function runTask(db: Db, task: TaskRow, apiKey: string, mode: "dry-run" | 
 
 // ---------- Discovery (feeds the mapping and member tables in the UI) ----------
 
-async function discover(db: Db, ownerHash: string, apiKey: string, psaType: PsaType, overrides: Record<string, string>) {
+type DiscoverInput = { emailOverrides: Record<string, string>; clientLinks: Record<string, string> };
+
+async function discover(db: Db, ownerHash: string, apiKey: string, psaType: PsaType, input: DiscoverInput) {
   const psa = await requireAdapter(db, ownerHash, psaType);
-  const [sp, members, psaRoles] = await Promise.all([loadScalePad(apiKey, psa.brandPattern), psa.listMembers(), psa.listTeamRoles()]);
+  const warnings: string[] = [];
+  const [sp, members, psaRoles, companies, segments] = await Promise.all([
+    loadScalePad(apiKey, psa.brandPattern, input.clientLinks),
+    psa.listMembers(),
+    psa.listTeamRoles(),
+    psa.listCompanies().catch((error) => {
+      warnings.push(`Couldn't list ${PSA_LABELS[psaType]} companies for manual linking (${errorMessage(error)})`);
+      return [] as PsaCompany[];
+    }),
+    loadSegments(apiKey).catch((error) => {
+      warnings.push(`Couldn't load ScalePad segments (${errorMessage(error)})`);
+      return [] as CsSegment[];
+    }),
+  ]);
   const usersByEmail = new Map(sp.users.map((u) => [normalizeEmail(u.email), u]));
-  const normalized = normalizeOverrides(overrides);
+  const normalized = normalizeOverrides(input.emailOverrides);
+  const companyNames = new Map(companies.map((c) => [c.id, c.name]));
+  const linkedCompanyIds = new Set(sp.clients.filter((c) => c.psaCompanyId).map((c) => c.psaCompanyId!));
+
+  // Custom fields (ConnectWise): every field seen on any company, with the values on linked companies.
+  const fields = new Map<string, { id: string; caption: string; values: Map<string, { value: string; count: number }> }>();
+  for (const company of companies) {
+    for (const f of company.fields || []) {
+      const entry = fields.get(f.id) || { id: f.id, caption: f.caption, values: new Map() };
+      fields.set(f.id, entry);
+      const key = normalizeValue(f.value);
+      if (!key || !linkedCompanyIds.has(company.id)) continue;
+      const v = entry.values.get(key) || { value: f.value.replace(/\s+/g, " ").trim(), count: 0 };
+      v.count++;
+      entry.values.set(key, v);
+    }
+  }
+  const customFields = [...fields.values()]
+    .sort((a, b) => a.caption.localeCompare(b.caption))
+    .map((f) => ({
+      id: f.id,
+      caption: f.caption,
+      values: [...f.values.entries()]
+        .sort((a, b) => b[1].count - a[1].count || a[1].value.localeCompare(b[1].value))
+        .map(([key, v]) => {
+          // How this value would match a person, for fields used as a role.
+          const found = normalized[key] ? { member: null, ambiguous: false } : memberForValue(v.value, members);
+          const member = found.member || valueMember(v.value);
+          const match = matchMember(member, usersByEmail, normalized);
+          return {
+            key,
+            value: v.value,
+            count: v.count,
+            memberName: found.member ? found.member.name || found.member.identifier : null,
+            ambiguous: found.ambiguous,
+            status: match.status,
+            via: match.status === "matched" ? (found.member ? match.via : "override") : null,
+            csEmail: match.status === "matched" ? match.user.email : null,
+          };
+        }),
+    }));
+
+  const manualLinks = Object.entries(input.clientLinks || {})
+    .map(([clientId, companyId]) => {
+      const client = sp.clients.find((c) => c.id === clientId);
+      return client ? { clientId, clientName: client.name, companyId, companyName: companyNames.get(companyId) || `Company ${companyId}` } : null;
+    })
+    .filter(Boolean);
+
   return {
     psaType,
     psaRoles,
     csRoles: sp.roles,
+    segments,
+    customFields,
+    warnings,
     members: members.map((m) => {
       const match = matchMember(m, usersByEmail, normalized);
       return {
@@ -638,8 +831,11 @@ async function discover(db: Db, ownerHash: string, apiKey: string, psaType: PsaT
     clients: {
       total: sp.clients.length,
       linked: sp.clients.filter((c) => c.psaCompanyId).length,
-      unlinked: sp.clients.filter((c) => !c.psaCompanyId).map((c) => c.name).slice(0, DETAIL_LIMIT),
+      unlinked: sp.clients.filter((c) => !c.psaCompanyId).map((c) => ({ id: c.id, name: c.name })).slice(0, 2000),
+      manual: manualLinks,
     },
+    // PSA companies not yet linked to a client, for the manual link picker.
+    psaCompanies: companies.filter((c) => !linkedCompanyIds.has(c.id)).map((c) => ({ id: c.id, name: c.name })).slice(0, 5000),
   };
 }
 
@@ -719,7 +915,10 @@ Deno.serve(async (req) => {
         return json({ connected: false });
       }
       case "discover":
-        return json(await discover(db, ownerHash, apiKey, psaType!, (body.emailOverrides as Record<string, string>) || {}));
+        return json(await discover(db, ownerHash, apiKey, psaType!, {
+          emailOverrides: (body.emailOverrides as Record<string, string>) || {},
+          clientLinks: (body.clientLinks as Record<string, string>) || {},
+        }));
       case "roles.create": {
         const labels = Array.isArray(body.labels) ? body.labels.map(text).slice(0, 100) : [];
         if (!labels.length) return json({ error: "No role names given." }, 400);
