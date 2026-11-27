@@ -100,6 +100,12 @@ Apply the SQL migrations in `supabase/migrations`, configure the Supabase URL an
 supabase secrets set PSA_CREDENTIALS_KEY="$(openssl rand -base64 48)"
 ```
 
+ConnectWise also needs `CW_CLIENT_ID`: the integration's Client ID from the ConnectWise Developer Network. It's one ID for the whole integration, so partners don't enter it. Connections saved before this secret existed keep using the Client ID they were saved with.
+
+```bash
+supabase secrets set CW_CLIENT_ID=your-client-id
+```
+
 Scheduled runs need a daily pg_cron job that calls the function with the service-role key. The SQL is in a comment at the end of `supabase/migrations/20261124000000_psa_role_sync.sql`. The function itself skips tasks whose interval (30 days by default) hasn't passed.
 
 The user first picks their PSA: ConnectWise, Autotask or HaloPSA. How a run works:
@@ -114,6 +120,8 @@ The user first picks their PSA: ConnectWise, Autotask or HaloPSA. How a run work
 5. **ConnectWise custom fields** (Fields tab) can also be used:
    - **As an account role:** the field's value names a person (login ID, email, "First Last" or "Last, First"). It is matched to a ConnectWise member and then a ScalePad user, or to a ScalePad email set for that value. Field roles share the role priority with team roles.
    - **As the client segment:** each value maps to a ScalePad segment (`GET /app/v1/segments`); values that match a segment name map themselves. Current segments come from `GET /app/v1/clients`, and changes are sent in bulk with `PATCH /app/v1/clients` (`client_ids`, `segment_id`). This replaces the client's current segment; a blank value leaves it alone.
+
+To test before syncing everyone, set **Clients to sync** on the Run tab to "Only selected clients" (saved as `syncScope: "selected"` and `scopeClientIds`). Runs, scheduled ones included, then skip every other client. Links aren't changed. The page blocks runs with a selected scope against an engine too old to honor it.
 
 The sync only adds account team assignments. Unmatched members, unmapped roles, role conflicts and per-client failures are reported in the run, so they never stop it. The matching and planning logic lives in `supabase/functions/psa-role-sync/plan.ts`, and its tests are in `src/lib/psa-role-sync-plan.test.ts`.
 

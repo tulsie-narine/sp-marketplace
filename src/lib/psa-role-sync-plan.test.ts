@@ -11,6 +11,7 @@ import {
   isDue,
   psaCompanyIdFromLineage,
   applyClientLinks,
+  applySyncScope,
   batchSegmentUpdates,
   buildFieldTeamEntries,
   buildSegmentPlan,
@@ -409,5 +410,14 @@ describe("manual client links", () => {
     const linked = applyClientLinks(clients, { "c-3": "200" });
     expect(linked.map((c) => [c.id, c.psaCompanyId])).toEqual([["c-1", "100"], ["c-2", null], ["c-3", "200"]]);
     expect(applyClientLinks(clients, {})).toBe(clients);
+  });
+});
+
+describe("sync scope", () => {
+  it("keeps every client for all, only the picked ones for selected", () => {
+    expect(applySyncScope(clients, "all", ["c-1"])).toBe(clients);
+    expect(applySyncScope(clients, undefined, undefined)).toBe(clients);
+    expect(applySyncScope(clients, "selected", ["c-2"]).map((c) => c.id)).toEqual(["c-2"]);
+    expect(applySyncScope(clients, "selected", [])).toEqual([]);
   });
 });

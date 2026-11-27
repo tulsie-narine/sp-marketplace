@@ -28,6 +28,9 @@ export type PsaRoleSyncConfig = {
   segmentMap: Record<string, string>;
   /** ScalePad client id -> PSA company id, for clients the PSA integration didn't link. */
   clientLinks: Record<string, string>;
+  /** "selected" limits runs to scopeClientIds, for a test before syncing every client. */
+  syncScope: "all" | "selected";
+  scopeClientIds: string[];
 };
 
 /** roleMap key for a ConnectWise custom field used as an account role. */
@@ -46,6 +49,8 @@ export const emptyPsaRoleSyncConfig = (psaType: PsaType = "connectwise"): PsaRol
   segmentFieldId: "",
   segmentMap: {},
   clientLinks: {},
+  syncScope: "all",
+  scopeClientIds: [],
 });
 
 // --- PSA catalog: what the picker shows and which connection fields each PSA needs ---
@@ -85,7 +90,6 @@ export const PSA_OPTIONS: PsaOption[] = [
     fields: [
       { key: "site", label: "Site" },
       { key: "companyId", label: "Company ID", hint: "The company you sign in to ConnectWise with" },
-      { key: "clientId", label: "Client ID", hint: "From developer.connectwise.com" },
       { key: "publicKey", label: "Public key" },
       { key: "secret", label: "Private key", secret: true },
     ],
@@ -169,11 +173,15 @@ export type Discovery = {
   /** ConnectWise company custom fields; empty for other PSAs. */
   customFields: DiscoveredField[];
   warnings: string[];
+  /** False when the engine is older than the test scope and would ignore it. */
+  scopeSupported: boolean;
   members: DiscoveredMember[];
   clients: {
     total: number;
     linked: number;
     unlinked: Array<{ id: string; name: string }>;
+    /** Linked clients, for picking a test scope. Empty from an engine older than the scope option. */
+    linkedList: Array<{ id: string; name: string }>;
     manual: Array<{ clientId: string; clientName: string; companyId: string; companyName: string }>;
   };
   /** PSA companies not linked to any ScalePad client, for manual linking. */
@@ -244,6 +252,8 @@ export const discoverPsa = async (psaType: PsaType, emailOverrides: Record<strin
     typeof c === "string" ? { id: `name-only-${i}`, name: c } : (c as { id: string; name: string }),
   );
   const outdated = !Array.isArray(d.customFields);
+  // An engine older than the test scope ignores it and would sync every client.
+  const scopeSupported = Array.isArray(d.clients?.linkedList);
   return {
     psaType,
     psaRoles: d.psaRoles || [],
@@ -254,9 +264,20 @@ export const discoverPsa = async (psaType: PsaType, emailOverrides: Record<strin
     psaCompanies: d.psaCompanies || [],
     warnings: [
       ...(d.warnings || []),
-      ...(outdated ? ["The PSA Role Sync engine is out of date, so custom fields and manual links aren't available yet. Ask your admin to redeploy psa-role-sync."] : []),
+      ...(outdated
+        ? ["The PSA Role Sync engine is out of date, so custom fields, manual links and test runs on selected clients aren't available yet. Ask your admin to redeploy psa-role-sync."]
+        : !scopeSupported
+          ? ["The PSA Role Sync engine is out of date, so test runs on selected clients aren't available yet. Ask your admin to redeploy psa-role-sync."]
+          : []),
     ],
-    clients: { total: d.clients?.total || 0, linked: d.clients?.linked || 0, unlinked, manual: d.clients?.manual || [] },
+    scopeSupported,
+    clients: {
+      total: d.clients?.total || 0,
+      linked: d.clients?.linked || 0,
+      unlinked,
+      manual: d.clients?.manual || [],
+      linkedList: d.clients?.linkedList || [],
+    },
   };
 };
 

@@ -564,3 +564,16 @@ export function applyClientLinks(clients: CsClient[], links: Record<string, stri
     return c;
   });
 }
+
+export type SyncScope = "all" | "selected";
+
+/**
+ * Limits a run to the clients the partner picked (for a test before syncing everyone). Links are
+ * untouched: clients outside the scope are simply left out of the run. "selected" with no ids
+ * means no clients.
+ */
+export function applySyncScope(clients: CsClient[], scope: SyncScope | undefined, clientIds: string[] | undefined): CsClient[] {
+  if (scope !== "selected") return clients;
+  const keep = new Set((clientIds || []).map((id) => String(id)));
+  return clients.filter((c) => keep.has(c.id));
+}

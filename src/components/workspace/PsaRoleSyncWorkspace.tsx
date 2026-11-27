@@ -436,6 +436,7 @@ export function PsaRoleSyncWorkspace() {
   const [leftTab, setLeftTab] = useState<"roles" | "members" | "fields" | "clients">("roles");
   const [fieldSearch, setFieldSearch] = useState("");
   const [clientSearch, setClientSearch] = useState("");
+  const [scopeSearch, setScopeSearch] = useState("");
   const [linkDrafts, setLinkDrafts] = useState<Record<string, string>>({});
   const [roleSearch, setRoleSearch] = useState("");
   const [memberSearch, setMemberSearch] = useState("");
@@ -536,7 +537,33 @@ export function PsaRoleSyncWorkspace() {
   const rolesPaged = usePaged(filteredRoles, roleSearch);
   const mappedCount = Object.values(config.roleMap).filter(Boolean).length;
   const segmentOn = psaType === "connectwise" && !!config.segmentFieldId;
-  const canRun = mappedCount > 0 || segmentOn;
+  const hasMapping = mappedCount > 0 || segmentOn;
+  // A test scope needs at least one client, and an engine that honors it (an older one would sync everyone).
+  const scopeSelected = config.syncScope === "selected";
+  const scopeBlock = !scopeSelected
+    ? null
+    : discovery && !discovery.scopeSupported
+      ? "Test runs on selected clients need the updated engine. Switch to all linked clients, or ask your admin to redeploy psa-role-sync."
+      : config.scopeClientIds.length === 0
+        ? "Pick at least one client to test on."
+        : null;
+  const canRun = hasMapping && !scopeBlock;
+  const runBlockReason = !hasMapping
+    ? `Map at least one ${psaName} role${psaType === "connectwise" ? " or custom field" : ""} first.`
+    : scopeBlock;
+
+  const linkedNameById = useMemo(() => new Map((discovery?.clients.linkedList || []).map((c) => [c.id, c.name])), [discovery]);
+  const filteredScope = useMemo(() => {
+    const q = scopeSearch.trim().toLowerCase();
+    return (discovery?.clients.linkedList || []).filter((c) => !q || c.name.toLowerCase().includes(q));
+  }, [discovery, scopeSearch]);
+  const scopePaged = usePaged(filteredScope, scopeSearch);
+  const toggleScopeClient = (id: string, on: boolean) => {
+    const ids = new Set(config.scopeClientIds);
+    if (on) ids.add(id);
+    else ids.delete(id);
+    updateConfig({ scopeClientIds: [...ids] });
+  };
 
   const filteredFields = useMemo(() => {
     const q = fieldSearch.trim().toLowerCase();
@@ -828,7 +855,7 @@ export function PsaRoleSyncWorkspace() {
 
   const handleScheduleToggle = async (enabled: boolean) => {
     if (enabled && !canRun) {
-      toast.error(`Map at least one ${psaName} role${psaType === "connectwise" ? " or custom field" : ""} before turning on the schedule.`);
+      toast.error(runBlockReason || "Finish the setup before turning on the schedule.");
       return;
     }
     try {
@@ -885,7 +912,7 @@ export function PsaRoleSyncWorkspace() {
   const handleRun = async (mode: "dry-run" | "live") => {
     setConfirmLive(false);
     if (!canRun) {
-      toast.error(`Map at least one ${psaName} role${psaType === "connectwise" ? " or custom field" : ""} first.`);
+      toast.error(runBlockReason || "Finish the setup first.");
       return;
     }
     setRunning(mode);
@@ -1509,6 +1536,63 @@ export function PsaRoleSyncWorkspace() {
                         </span>
                       </span>
                     </label>
+                    <Field
+                      label="Clients to sync"
+                      hint={scopeSelected ? "Only the clients you tick below are synced, scheduled runs included. Links aren't changed." : undefined}
+                    >
+                      <select
+                        value={config.syncScope}
+                        onChange={(e) => updateConfig({ syncScope: e.target.value as PsaRoleSyncConfig["syncScope"] })}
+                        className={`${selectClass} w-full h-8`}
+                      >
+                        <option value="all">All linked clients{discovery ? ` (${discovery.clients.linked})` : ""}</option>
+                        <option value="selected">Only selected clients (test)</option>
+                      </select>
+                    </Field>
+                    {scopeSelected && discovery?.scopeSupported && (
+                      <div className="rounded-md border border-border">
+                        <div className="p-2 border-b border-border space-y-1.5">
+                          <div className="relative">
+                            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                            <input
+                              type="text"
+                              placeholder="Search linked clients…"
+                              value={scopeSearch}
+                              onChange={(e) => setScopeSearch(e.target.value)}
+                              className={`${inputClass} h-7 text-[11px] pl-8`}
+                            />
+                          </div>
+                          {config.scopeClientIds.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {config.scopeClientIds.map((id) => (
+                                <button
+                                  key={id}
+                                  onClick={() => toggleScopeClient(id, false)}
+                                  className="text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary flex items-center gap-0.5 hover:bg-primary/25"
+                                >
+                                  {linkedNameById.get(id) || "Client no longer linked"} <X className="w-3 h-3" />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        {scopePaged.rows.length === 0 ? (
+                          <EmptyRow>{discovery.clients.linkedList.length ? "No clients match." : "No linked clients yet."}</EmptyRow>
+                        ) : (
+                          scopePaged.rows.map((c) => (
+                            <label key={c.id} className="flex items-center gap-2 px-3 py-1.5 border-b border-border last:border-b-0 cursor-pointer hover:bg-surface-raised">
+                              <Checkbox
+                                checked={config.scopeClientIds.includes(c.id)}
+                                onCheckedChange={(v) => toggleScopeClient(c.id, v === true)}
+                                className="h-3.5 w-3.5"
+                              />
+                              <span className="text-[11px] text-foreground truncate">{c.name}</span>
+                            </label>
+                          ))
+                        )}
+                        <Pagination page={scopePaged.page} totalPages={scopePaged.totalPages} onPageChange={scopePaged.setPage} />
+                      </div>
+                    )}
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => handleRun("dry-run")}
@@ -1524,11 +1608,12 @@ export function PsaRoleSyncWorkspace() {
                       >
                         {running === "live" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />} Run live
                       </button>
-                      {!canRun && <span className="text-[10px] text-muted-foreground">Map at least one role{psaType === "connectwise" ? " or custom field" : ""} to run.</span>}
+                      {runBlockReason && <span className="text-[10px] text-muted-foreground">{runBlockReason}</span>}
                     </div>
                     {running && (
                       <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
-                        <Loader2 className="w-3 h-3 animate-spin" /> Reading every linked client's {psaName} team. This can take a minute or two.
+                        <Loader2 className="w-3 h-3 animate-spin" />{" "}
+                        {scopeSelected ? `Reading the selected clients' ${psaName} teams.` : `Reading every linked client's ${psaName} team. This can take a minute or two.`}
                       </p>
                     )}
                     {result && <RunResults result={result} psaName={psaName} />}
@@ -1590,6 +1675,7 @@ export function PsaRoleSyncWorkspace() {
           <AlertDialogHeader>
             <AlertDialogTitle>Run the sync live?</AlertDialogTitle>
             <AlertDialogDescription>
+              {scopeSelected ? `This only touches the ${config.scopeClientIds.length} selected client(s). ` : ""}
               This assigns matched {psaName} team members to their ScalePad clients with the mapped account roles. It only adds assignments
               {config.overwriteRoles ? " and replaces different roles" : ""}; nobody is removed.
               {segmentOn ? " It also sets each client's segment from the mapped custom field, replacing the current segment; clients with a blank value are left alone." : ""}{" "}

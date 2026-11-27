@@ -23,6 +23,7 @@
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.0";
 import {
   applyClientLinks,
+  applySyncScope,
   AUTOTASK_OWNER_ROLE_ID,
   AUTOTASK_OWNER_ROLE_NAME,
   batchActions,
@@ -48,6 +49,7 @@ import {
   psaCompanyIdFromLineage,
   type CsAssignment,
   type CsClient,
+  type SyncScope,
   type CsRole,
   type CsUser,
   type PsaMember,
@@ -85,6 +87,9 @@ type Config = {
   segmentMap?: Record<string, string>;
   /** ScalePad client id -> PSA company id, for clients the PSA integration didn't link. */
   clientLinks?: Record<string, string>;
+  /** "selected" limits runs to scopeClientIds, for a test before syncing every client. */
+  syncScope?: SyncScope;
+  scopeClientIds?: string[];
 };
 
 type TaskRow = { id: string; owner_hash: string; name: string; config: Config; schedule_enabled: boolean; last_run_at: string | null };
@@ -281,8 +286,16 @@ function cwBaseUrl(site: string) {
   return `https://${host}/v4_6_release/apis/3.0`;
 }
 
+/**
+ * ConnectWise wants one client ID per integration, so it comes from the CW_CLIENT_ID secret.
+ * Connections saved before that keep working with the client ID they were saved with.
+ */
+const cwClientId = (settings: Record<string, string>) => (Deno.env.get("CW_CLIENT_ID") || "").trim() || text(settings.clientId).trim();
+
 function connectWiseAdapter(conn: Connection): PsaAdapter {
-  const { site, companyId, publicKey, clientId } = conn.settings;
+  const { site, companyId, publicKey } = conn.settings;
+  const clientId = cwClientId(conn.settings);
+  if (!clientId) throw new Error("The ConnectWise client ID isn't set up yet. Ask your admin to set the CW_CLIENT_ID secret.");
   const base = cwBaseUrl(site);
   const headers = {
     Authorization: `Basic ${btoa(`${companyId}+${publicKey}:${conn.secret}`)}`,
@@ -527,8 +540,9 @@ function adapterFor(conn: Connection): PsaAdapter {
 async function connectionSettings(psaType: PsaType, body: ApiRow): Promise<Record<string, string>> {
   const field = (name: string) => text(body[name]).trim();
   if (psaType === "connectwise") {
-    const settings = { site: field("site"), companyId: field("companyId"), publicKey: field("publicKey"), clientId: field("clientId") };
-    if (Object.values(settings).some((v) => !v)) throw new Error("Site, company ID, public key and client ID are required.");
+    const settings = { site: field("site"), companyId: field("companyId"), publicKey: field("publicKey") };
+    if (Object.values(settings).some((v) => !v)) throw new Error("Site, company ID and public key are required.");
+    if (!cwClientId(settings)) throw new Error("The ConnectWise client ID isn't set up yet. Ask your admin to set the CW_CLIENT_ID secret.");
     return settings;
   }
   if (psaType === "halo") {
@@ -570,7 +584,9 @@ async function runTask(db: Db, task: TaskRow, apiKey: string, mode: "dry-run" | 
   try {
     const psa = await requireAdapter(db, task.owner_hash, psaType);
     const [sp, psaMembers] = await Promise.all([loadScalePad(apiKey, psa.brandPattern, config.clientLinks), psa.listMembers()]);
-    const linked = sp.clients.filter((c) => c.psaCompanyId);
+    // A test scope leaves every other client out of the run; links themselves are untouched.
+    const clients = applySyncScope(sp.clients, config.syncScope, Array.isArray(config.scopeClientIds) ? config.scopeClientIds.map(text) : []);
+    const linked = clients.filter((c) => c.psaCompanyId);
     const roleMap = config.roleMap || {};
     const overrides = normalizeOverrides(config.emailOverrides);
 
@@ -627,7 +643,7 @@ async function runTask(db: Db, task: TaskRow, apiKey: string, mode: "dry-run" | 
       members,
       teams: plannable,
       users: sp.users,
-      clients: sp.clients,
+      clients,
       roles: sp.roles,
       assignments,
       config: {
@@ -700,7 +716,8 @@ async function runTask(db: Db, task: TaskRow, apiKey: string, mode: "dry-run" | 
       segmentApplied: segmentsApplied,
       segmentUnchanged: segmentPlan.unchanged,
       linkedClients: linked.length,
-      unlinkedClients: sp.clients.length - linked.length,
+      unlinkedClients: clients.length - linked.length,
+      scopedClients: config.syncScope === "selected" ? clients.length : 0,
       psaMembers: psaMembers.length,
       planned: plan.actions.length,
       applied,
@@ -832,6 +849,8 @@ async function discover(db: Db, ownerHash: string, apiKey: string, psaType: PsaT
       total: sp.clients.length,
       linked: sp.clients.filter((c) => c.psaCompanyId).length,
       unlinked: sp.clients.filter((c) => !c.psaCompanyId).map((c) => ({ id: c.id, name: c.name })).slice(0, 2000),
+      // Linked clients, for picking a test scope.
+      linkedList: sp.clients.filter((c) => c.psaCompanyId).map((c) => ({ id: c.id, name: c.name })).slice(0, 5000),
       manual: manualLinks,
     },
     // PSA companies not yet linked to a client, for the manual link picker.
